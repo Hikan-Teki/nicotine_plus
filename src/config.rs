@@ -1,7 +1,59 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+/// A single per-character hotkey binding. `vk` is a Win32 Virtual-Key
+/// code (or evdev code on Linux); `modifier` is an optional second VK
+/// that must be held down (typically Shift/Ctrl/Alt).
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct CharacterHotkey {
+    pub vk: u16,
+    #[serde(default)]
+    pub modifier: Option<u16>,
+}
+
+/// How the visible-at-a-glance view of clients is rendered.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayMode {
+    /// One DWM thumbnail window per EVE client (default).
+    Previews,
+    /// A single always-on-top window listing each character name. Active
+    /// character shown in Nicotine red with a 🚬 marker.
+    List,
+}
+
+/// Settings that components watch for *live* changes — e.g. the preview
+/// manager resizes windows as soon as these change, without waiting for a
+/// save-to-disk + hot-reload cycle. Shared via Arc<Mutex<>> between the
+/// config panel (writer) and the preview manager (reader).
+// LiveSettings fields are read by the Windows preview manager only.
+// On Linux they're allocated and written by `from_config` but never
+// read, so suppress the unused-field lint there.
+#[derive(Debug, Clone)]
+#[cfg_attr(unix, allow(dead_code))]
+pub struct LiveSettings {
+    pub preview_width: u32,
+    pub preview_height: u32,
+    pub display_mode: DisplayMode,
+    /// When true, both preview windows and the client-list window
+    /// ignore mouse drags so they can't accidentally be knocked out of
+    /// position mid-game. Click-to-activate still works on previews.
+    pub positions_locked: bool,
+}
+
+impl LiveSettings {
+    pub fn from_config(config: &Config) -> Arc<Mutex<Self>> {
+        Arc::new(Mutex::new(Self {
+            preview_width: config.preview_width,
+            preview_height: config.preview_height,
+            display_mode: config.display_mode,
+            positions_locked: config.positions_locked,
+        }))
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
@@ -36,30 +88,92 @@ pub struct Config {
     pub keyboard_device_path: Option<String>,
     #[serde(default = "default_modifier_key")]
     pub modifier_key: Option<u16>,
+    /// Width of preview windows in pixels (Windows only). Single global value
+    /// — every preview gets the same size. Aspect ratio is preserved on the
+    /// thumbnail; the window is sized exactly as configured.
+    #[serde(default = "default_preview_width")]
+    pub preview_width: u32,
+    /// Height of preview windows in pixels (Windows only).
+    #[serde(default = "default_preview_height")]
+    pub preview_height: u32,
+    /// Whether DWM preview windows are spawned at all (Windows only). When
+    /// false, the daemon runs headless and you cycle via hotkeys / CLI only.
+    #[serde(default = "default_show_previews")]
+    pub show_previews: bool,
+    /// Ordered list of EVE character names. Forward/backward cycling
+    /// traverses this order; `switch N` maps target N to entry N-1.
+    /// Empty list = cycle through whatever order the window manager
+    /// reports (no stable ordering).
+    #[serde(default)]
+    pub characters: Vec<String>,
+    /// Which on-screen representation of running clients Nicotine shows.
+    #[serde(default = "default_display_mode")]
+    pub display_mode: DisplayMode,
+    /// When true, drag is disabled on preview windows and the client
+    /// list so they can't accidentally move during gameplay.
+    #[serde(default)]
+    pub positions_locked: bool,
+    /// Map of character name → hotkey for jump-to-character. When the
+    /// configured key (plus optional modifier) fires, Nicotine activates
+    /// that EVE client directly — independent of the forward/backward
+    /// cycle. Keyed by name so bindings follow reorders and renames
+    /// without reassigning keys.
+    #[serde(default)]
+    pub character_hotkeys: HashMap<String, CharacterHotkey>,
 }
 
 fn default_enable_mouse() -> bool {
     true
 }
 
+#[cfg(unix)]
 fn default_forward_button() -> u16 {
-    276 // BTN_SIDE (forward button, mouse button 9)
+    276 // BTN_SIDE (forward button, mouse button 9) — evdev code
 }
 
+#[cfg(windows)]
+fn default_forward_button() -> u16 {
+    2 // XBUTTON2 (forward side button)
+}
+
+#[cfg(unix)]
 fn default_backward_button() -> u16 {
-    275 // BTN_EXTRA (backward button, mouse button 8)
+    275 // BTN_EXTRA (backward button, mouse button 8) — evdev code
 }
 
+#[cfg(windows)]
+fn default_backward_button() -> u16 {
+    1 // XBUTTON1 (backward side button)
+}
+
+#[cfg(unix)]
 fn default_enable_keyboard() -> bool {
-    false // Disabled by default to avoid conflicts
+    false // Disabled by default to avoid conflicts with games that use Tab
 }
 
+#[cfg(windows)]
+fn default_enable_keyboard() -> bool {
+    true // F10/F11 are uncommon enough to enable by default for cycling
+}
+
+#[cfg(unix)]
 fn default_forward_key() -> u16 {
-    15 // KEY_TAB
+    15 // KEY_TAB — evdev code
 }
 
+#[cfg(windows)]
+fn default_forward_key() -> u16 {
+    0x7A // VK_F11
+}
+
+#[cfg(unix)]
 fn default_backward_key() -> u16 {
-    15 // KEY_TAB (Modifier applied if set)
+    15 // KEY_TAB (Modifier applied if set) — evdev code
+}
+
+#[cfg(windows)]
+fn default_backward_key() -> u16 {
+    0x79 // VK_F10
 }
 
 fn default_show_overlay() -> bool {
@@ -86,6 +200,22 @@ fn default_modifier_key() -> Option<u16> {
     None // No modifier for backward shifting by default
 }
 
+fn default_preview_width() -> u32 {
+    320
+}
+
+fn default_preview_height() -> u32 {
+    180
+}
+
+fn default_show_previews() -> bool {
+    true
+}
+
+fn default_display_mode() -> DisplayMode {
+    DisplayMode::Previews
+}
+
 impl Config {
     fn config_dir() -> PathBuf {
         let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
@@ -99,28 +229,22 @@ impl Config {
         path
     }
 
-    /// Load character order from characters.txt
-    /// Each line is a character name (without "EVE - " prefix)
-    /// Returns None if file doesn't exist
-    pub fn load_characters() -> Option<Vec<String>> {
-        let mut path = Self::config_dir();
-        path.push("characters.txt");
-
-        if !path.exists() {
-            return None;
+    /// Persist the current Config back to disk. Used by the config panel
+    /// to commit user edits. Only called from the Windows config panel,
+    /// hence the dead-code allow on Linux.
+    #[cfg_attr(unix, allow(dead_code))]
+    pub fn save(&self) -> Result<()> {
+        let config_path = Self::config_path();
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent)?;
         }
-
-        fs::read_to_string(&path).ok().map(|contents| {
-            contents
-                .lines()
-                .map(|line| line.trim().to_string())
-                .filter(|line| !line.is_empty() && !line.starts_with('#'))
-                .collect()
-        })
+        let contents = toml::to_string_pretty(self).context("Failed to serialize config")?;
+        fs::write(&config_path, contents).context("Failed to write config.toml")?;
+        Ok(())
     }
 
+    #[cfg(unix)]
     fn detect_display_size() -> (u32, u32) {
-        // Try to detect display size using xrandr
         if let Ok(output) = std::process::Command::new("xrandr")
             .args(["--current"])
             .output()
@@ -140,47 +264,65 @@ impl Config {
                 }
             }
         }
-
-        // Fallback to common resolution
         (1920, 1080)
+    }
+
+    #[cfg(windows)]
+    fn detect_display_size() -> (u32, u32) {
+        use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+        let w = unsafe { GetSystemMetrics(SM_CXSCREEN) };
+        let h = unsafe { GetSystemMetrics(SM_CYSCREEN) };
+        if w > 0 && h > 0 {
+            (w as u32, h as u32)
+        } else {
+            (1920, 1080)
+        }
+    }
+
+    fn build_default(display_width: u32, display_height: u32) -> Self {
+        Self {
+            display_width,
+            display_height,
+            panel_height: 0,
+            eve_width: (display_width as f32 * 0.54) as u32, // ~54% of width
+            eve_height: display_height,
+            overlay_x: 10.0,
+            overlay_y: 10.0,
+            enable_mouse_buttons: default_enable_mouse(),
+            forward_button: default_forward_button(),
+            backward_button: default_backward_button(),
+            enable_keyboard_buttons: default_enable_keyboard(),
+            forward_key: default_forward_key(),
+            backward_key: default_backward_key(),
+            show_overlay: default_show_overlay(),
+            mouse_device_name: default_mouse_device_name(),
+            mouse_device_path: default_mouse_device_path(),
+            minimize_inactive: default_minimize_inactive(),
+            keyboard_device_path: default_keyboard_device_path(),
+            modifier_key: default_modifier_key(),
+            preview_width: default_preview_width(),
+            preview_height: default_preview_height(),
+            show_previews: default_show_previews(),
+            characters: Vec::new(),
+            display_mode: default_display_mode(),
+            positions_locked: false,
+            character_hotkeys: HashMap::new(),
+        }
     }
 
     pub fn load() -> Result<Self> {
         let config_path = Self::config_path();
 
-        // Try to load existing config
         if let Ok(contents) = fs::read_to_string(&config_path) {
             return toml::from_str(&contents).context("Failed to parse config.toml");
         }
 
-        // Auto-generate config based on detected display
         println!("Generating config based on your display...");
         let (display_width, display_height) = Self::detect_display_size();
         println!("Detected display: {}x{}", display_width, display_height);
 
-        let config = Self {
-            display_width,
-            display_height,
-            panel_height: 0, // Assume no panel by default
-            eve_width: (display_width as f32 * 0.54) as u32, // ~54% of width
-            eve_height: display_height,
-            overlay_x: 10.0,
-            overlay_y: 10.0,
-            enable_mouse_buttons: true,
-            forward_button: 276,  // BTN_SIDE (button 9)
-            backward_button: 275, // BTN_EXTRA (button 8)
-            enable_keyboard_buttons: false,
-            forward_key: 15,  // KEY_TAB
-            backward_key: 15, // KEY_TAB (with Shift)
-            show_overlay: true,
-            mouse_device_name: None,
-            mouse_device_path: None,
-            minimize_inactive: false,
-            keyboard_device_path: None,
-            modifier_key: None,
-        };
+        let config = Self::build_default(display_width, display_height);
 
-        // Save the generated config
         if let Some(parent) = config_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -196,27 +338,7 @@ impl Config {
         let config_path = Self::config_path();
         let (display_width, display_height) = Self::detect_display_size();
 
-        let config = Self {
-            display_width,
-            display_height,
-            panel_height: 0,
-            eve_width: (display_width as f32 * 0.54) as u32,
-            eve_height: display_height,
-            overlay_x: 10.0,
-            overlay_y: 10.0,
-            enable_mouse_buttons: true,
-            forward_button: 276,
-            backward_button: 275,
-            enable_keyboard_buttons: false,
-            forward_key: 15,
-            backward_key: 15,
-            show_overlay: true,
-            mouse_device_name: None,
-            mouse_device_path: None,
-            minimize_inactive: false,
-            keyboard_device_path: None,
-            modifier_key: None,
-        };
+        let config = Self::build_default(display_width, display_height);
 
         if let Some(parent) = config_path.parent() {
             fs::create_dir_all(parent)?;
@@ -258,6 +380,13 @@ mod tests {
             minimize_inactive: false,
             keyboard_device_path: None,
             modifier_key: None,
+            preview_width: 320,
+            preview_height: 180,
+            show_previews: true,
+            characters: Vec::new(),
+            display_mode: DisplayMode::Previews,
+            positions_locked: false,
+            character_hotkeys: HashMap::new(),
         };
 
         // Height should be: 1080 - 40 = 1040
@@ -286,6 +415,13 @@ mod tests {
             minimize_inactive: false,
             keyboard_device_path: None,
             modifier_key: None,
+            preview_width: 320,
+            preview_height: 180,
+            show_previews: true,
+            characters: Vec::new(),
+            display_mode: DisplayMode::Previews,
+            positions_locked: false,
+            character_hotkeys: HashMap::new(),
         };
 
         assert_eq!(config.eve_height_adjusted(), 1080);
@@ -313,6 +449,13 @@ mod tests {
             minimize_inactive: false,
             keyboard_device_path: None,
             modifier_key: None,
+            preview_width: 320,
+            preview_height: 180,
+            show_previews: true,
+            characters: Vec::new(),
+            display_mode: DisplayMode::Previews,
+            positions_locked: false,
+            character_hotkeys: HashMap::new(),
         };
 
         let toml_str = toml::to_string(&config).unwrap();
