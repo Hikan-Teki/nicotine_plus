@@ -50,20 +50,20 @@ fn fetch_status() -> Result<UpdateStatus> {
         .timeout(Duration::from_secs(TIMEOUT_SECS))
         .user_agent("nicotine")
         .build()
-        .context("Failed to build HTTP client")?;
+        .context("HTTP istemcisi oluşturulamadı")?;
 
     let response = client
         .get(GITHUB_API_URL)
         .send()
-        .context("Failed to fetch latest release from GitHub")?;
+        .context("GitHub'dan son sürüm alınamadı")?;
 
     if !response.status().is_success() {
-        anyhow::bail!("GitHub API returned {}", response.status());
+        anyhow::bail!("GitHub API {} döndürdü", response.status());
     }
 
     let release: GithubRelease = response
         .json()
-        .context("Failed to parse GitHub API response")?;
+        .context("GitHub API yanıtı ayrıştırılamadı")?;
     let latest = release.tag_name.trim_start_matches('v').to_string();
 
     if is_newer_version(&latest, CURRENT_VERSION)? {
@@ -96,18 +96,18 @@ fn parse_version(version: &str) -> Result<(u32, u32, u32)> {
     let parts: Vec<&str> = version.split('.').collect();
 
     if parts.len() != 3 {
-        anyhow::bail!("Invalid version format: {}", version);
+        anyhow::bail!("Geçersiz sürüm biçimi: {}", version);
     }
 
     let major = parts[0]
         .parse::<u32>()
-        .context("Failed to parse major version")?;
+        .context("Ana sürüm numarası ayrıştırılamadı")?;
     let minor = parts[1]
         .parse::<u32>()
-        .context("Failed to parse minor version")?;
+        .context("Alt sürüm numarası ayrıştırılamadı")?;
     let patch = parts[2]
         .parse::<u32>()
-        .context("Failed to parse patch version")?;
+        .context("Yama sürüm numarası ayrıştırılamadı")?;
 
     Ok((major, minor, patch))
 }

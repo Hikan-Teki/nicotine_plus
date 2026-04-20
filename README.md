@@ -1,110 +1,118 @@
 <div align="center">
-  <img src="assets/ghlogo.png" alt="Nicotine Logo" width="600">
+  <img src="assets/ghlogo.png" alt="Nicotine Logosu" width="600">
 </div>
 
 # Nicotine 🚬
 
-High-performance EVE Online multiboxing tool for Windows, inspired by EVE-O Preview.
+EVE Online için yüksek performanslı Windows multiboxing aracı — EVE-O Preview'dan esinlenilmiştir.
 
-## Features
+## Özellikler
 
-- **Instant client cycling** with mouse side buttons or keyboard hotkeys (F10/F11 by default)
-- **DWM preview windows** - one live thumbnail per EVE client, click to activate
-- **List view** - compact always-on-top panel listing characters with active indicator
-- **Per-character hotkeys** - jump straight to a specific client
-- **Auto-stack windows** to perfectly center multiple EVE clients
-- **Auto-detects display resolution** - works on any monitor setup
-- **Minimize inactive clients** - Optional feature to reduce resource usage by minimizing unfocused clients
-- **Hot-reload config** - slider changes in the config panel take effect live
+- **Anında istemci geçişi** fare yan tuşları veya klavye kısayollarıyla (varsayılan: F10/F11)
+- **DWM önizleme pencereleri** — her EVE istemcisi için canlı küçük resim; tıklayınca o istemciye geçer
+- **Liste görünümü** — karakter adlarını gösteren, her zaman üstte duran kompakt pencere; aktif karakter işaretli
+- **Karaktere özel kısayollar** — belirli bir istemciye doğrudan atlama
+- **Scout desteği** — döngüde değil, ama kısayolla erişilebilir karakterler (örn. scout alt'ları)
+- **Çoklu değiştirici desteği** — `Ctrl+Shift+Num 1` gibi kombolar, numpad tuşları dâhil
+- **Otomatik üst üste dizme** — birden çok EVE istemcisini kusursuz biçimde ortalar
+- **Ekran çözünürlüğünü otomatik algılar** — her monitör kurulumunda çalışır
+- **Aktif olmayan istemcileri küçült** — kaynak tüketimini azaltmak için isteğe bağlı
+- **Canlı yapılandırma** — paneldeki değişiklikler anında uygulanır, yeniden başlatma gerekmez
 
-## Quick Install
+## Hızlı Kurulum
 
-Grab the latest `Nicotine.exe` from the [GitHub Releases page](https://github.com/Hikan-Teki/nicotine_plus/releases) and double-click to launch. The config panel opens on first run and a default `config.toml` is generated at `%APPDATA%\nicotine\config.toml`.
+[GitHub Releases sayfasından](https://github.com/Hikan-Teki/nicotine_plus/releases) en son `Nicotine.exe` dosyasını indirip çift tıklayın. İlk çalıştırmada yapılandırma paneli açılır ve `%APPDATA%\nicotine\config.toml` altında varsayılan bir yapılandırma oluşturulur.
 
-## Usage
+## Kullanım
 
-Double-clicking `Nicotine.exe` is equivalent to `nicotine start` — it spawns the daemon and opens the config panel.
+`Nicotine.exe`'ye çift tıklamak `nicotine start` ile aynıdır — daemon'u başlatır ve yapılandırma panelini açar.
 
-### Basic Commands
+### Temel Komutlar
 
 ```
-nicotine start          # Start everything (daemon + previews)
-nicotine stop           # Stop all Nicotine processes
-nicotine stack          # Stack all EVE windows
-nicotine forward        # Cycle to next client
-nicotine backward       # Cycle to previous client
-nicotine 1              # Jump to client 1
-nicotine 2              # Jump to client 2
+nicotine start          # Her şeyi başlat (daemon + önizlemeler)
+nicotine stop           # Tüm Nicotine süreçlerini durdur
+nicotine stack          # Tüm EVE pencerelerini üst üste diz
+nicotine forward        # Bir sonraki istemciye geç
+nicotine backward       # Bir önceki istemciye geç
+nicotine 1              # 1 numaralı istemciye atla
+nicotine 2              # 2 numaralı istemciye atla
 ```
 
-### Targeted Cycling
+### Hedefli Geçiş
 
-By default, `nicotine 1`, `nicotine 2`, etc. use window detection order. To define your own order, list character names in `config.toml` under `characters`:
+Varsayılan olarak `nicotine 1`, `nicotine 2` vb. pencere algılama sırasını kullanır. Kendi sıranızı tanımlamak için `config.toml` içinde `characters` listesine karakter adlarını yazın:
 
 ```toml
 characters = [
-  "Main Character",
-  "Alt One",
-  "Alt Two",
+  "Ana Karakter",
+  "Alt 1",
+  "Alt 2",
 ]
 ```
 
-Line 1 = target 1, line 2 = target 2, etc.
+Sıra 1 = hedef 1, sıra 2 = hedef 2 vb.
 
-### Hotkeys
+### Scout Karakterleri (Döngü Dışı)
 
-Edit keys via the config panel or directly in `config.toml`:
+13 karakter çalıştırıyorsanız ama yalnızca 12'sinin döngüye girmesini istiyorsanız (13. karakter scout olarak sadece kısayolla erişilsin), yapılandırma panelinde o satırdaki "döngüde" kutucuğunu kapatın. Karakter listede ve önizlemede görünür kalır, bağlı kısayolu çalışmaya devam eder, ama ileri/geri geçişte atlanır. `switch N` komutu bu karakterlere de ulaşır.
+
+### Kısayollar
+
+Panelden veya `config.toml` dosyasından düzenleyin:
 
 ```toml
 enable_keyboard_buttons = true
 forward_key  = 0x7A  # VK_F11
 backward_key = 0x79  # VK_F10
-modifier_key = 0     # Optional extra key that must be held for backward
+modifier_key = 0     # Geri için basılı tutulacak isteğe bağlı tuş
 ```
 
-Mouse side buttons are off by default (they clash with browser back/forward); toggle with `enable_mouse_buttons = true`.
+Karakter başına kısayollar için panelde her satırdaki `Ctrl` / `Shift` / `Alt` kutularını işaretleyin, sonra bağlama düğmesine basıp istediğiniz tuşa (numpad dâhil) basın. Böylece `Ctrl+Num 1`, `Ctrl+Shift+F11` gibi kombolar çalışır.
 
-## Configuration
+Fare yan tuşları varsayılan olarak kapalıdır (tarayıcıdaki ileri-geri tuşlarıyla çakışmaması için). Panelden açabilirsiniz.
 
-Config file: `%APPDATA%\nicotine\config.toml`
+## Yapılandırma
 
-Auto-generated on first run. Key settings:
+Yapılandırma dosyası: `%APPDATA%\nicotine\config.toml`
+
+İlk çalıştırmada otomatik oluşturulur. Temel ayarlar:
 
 ```toml
 display_width = 1920
 display_height = 1080
-panel_height = 0            # Set this if you have a taskbar/panel
-eve_width = 1037            # ~54% of display width
+panel_height = 0            # Taskbar/panel varsa buraya yazın
+eve_width = 1037            # Ekran genişliğinin ~%54'ü
 eve_height = 1080
 enable_mouse_buttons = false
-forward_button = 2          # XBUTTON2 (forward side button)
-backward_button = 1         # XBUTTON1 (backward side button)
+forward_button = 2          # XBUTTON2 (ileri yan tuş)
+backward_button = 1         # XBUTTON1 (geri yan tuş)
 enable_keyboard_buttons = true
 forward_key = 0x7A          # VK_F11
 backward_key = 0x79         # VK_F10
-minimize_inactive = false   # Minimize clients when cycling away
+minimize_inactive = false   # Geçişte aktif olmayanı küçült
 preview_width = 320
 preview_height = 180
-show_previews = true        # Set false for headless daemon (hotkeys only)
+show_previews = true        # false yaparsanız sadece kısayollarla çalışır
 positions_locked = false
 ```
 
-## Architecture
+## Mimari
 
-- **Daemon mode**: Maintains window state in memory for instant cycling
-- **Named-pipe IPC**: ~2ms command latency (vs ~50-100ms process spawning)
-- **Native input hooks**: Low-level keyboard + mouse hooks for hotkeys
-- **DWM thumbnails**: Live preview windows via the Desktop Window Manager API
+- **Daemon modu**: Pencere durumunu bellekte tutar, geçişler anında olur
+- **Adlandırılmış pipe IPC**: ~2ms komut gecikmesi (süreç başlatmaya göre ~50-100ms kazanç)
+- **Yerel giriş kancaları**: Düşük seviye klavye + fare kancaları
+- **DWM küçük resimleri**: Windows Desktop Window Manager API'sini kullanan canlı önizleme pencereleri
 
-## Building from Source
+## Kaynak Koddan Derleme
 
 ```
-# Install Rust (https://rustup.rs)
+# Rust kurun (https://rustup.rs)
 cargo build --release
 
-# Binary at: target\release\Nicotine.exe
+# Çıktı: target\release\Nicotine.exe
 ```
 
-## License
+## Lisans
 
-See [LICENSE](LICENSE.md)
+[LICENSE](LICENSE.md) dosyasına bakınız.

@@ -171,7 +171,7 @@ pub fn spawn(
 ) -> Result<JoinHandle<()>> {
     let handle = std::thread::spawn(move || {
         if let Err(e) = run_listener(config, wm, state) {
-            eprintln!("Windows input listener exited with error: {}", e);
+            eprintln!("Windows giriş dinleyicisi hatayla sonlandı: {}", e);
         }
     });
     Ok(handle)
@@ -206,8 +206,8 @@ fn run_listener(
             0,
         )
     }
-    .context("SetWindowsHookExW failed — check that the daemon process has UI access")?;
-    println!("Mouse side-button hook installed");
+    .context("SetWindowsHookExW başarısız — daemon sürecinin UI erişimi olduğundan emin olun")?;
+    println!("Fare yan tuşu kancası yüklendi");
 
     // Register keyboard hotkeys if enabled.
     register_hotkeys(&config);
@@ -265,7 +265,7 @@ fn run_listener(
         if let Some(direction) = cycle {
             let minimize_inactive = minimize_inactive_lookup();
             if let Err(e) = perform_cycle(&wm, &state, direction, minimize_inactive) {
-                eprintln!("Cycle action failed: {}", e);
+                eprintln!("Geçiş eylemi başarısız: {}", e);
             }
             continue;
         }
@@ -283,7 +283,7 @@ fn run_listener(
                     }
                     if let Err(e) = state_guard.switch_to_character(&name, &*wm, minimize_inactive)
                     {
-                        eprintln!("Character switch failed: {}", e);
+                        eprintln!("Karakter geçişi başarısız: {}", e);
                     }
                 }
             }
@@ -346,7 +346,7 @@ unsafe fn do_register_hotkeys(config: &Config) {
             lookup.insert(next_id, entry.name.clone());
         } else {
             eprintln!(
-                "Failed to register per-character hotkey for '{}' (another app may own it)",
+                "'{}' için karakter kısayolu kaydedilemedi (başka bir uygulama tuşu kullanıyor olabilir)",
                 entry.name
             );
         }

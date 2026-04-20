@@ -64,9 +64,9 @@ impl Daemon {
             Some(config.characters.clone())
         };
         match &character_order {
-            Some(names) => println!("Loaded {} character(s) from config.toml", names.len()),
+            Some(names) => println!("config.toml'dan {} karakter yüklendi", names.len()),
             None => println!(
-                "No `characters` configured in config.toml — cycling will use detection order"
+                "config.toml içinde `characters` tanımlı değil — döngü, algılanan sırayı kullanacak"
             ),
         }
         state
@@ -85,7 +85,7 @@ impl Daemon {
 
     pub fn run(&mut self) -> Result<()> {
         let listener = ipc::bind_listener()?;
-        println!("Nicotine daemon listening for IPC commands");
+        println!("Nicotine daemon IPC komutlarını dinliyor");
 
         // Spawn platform-specific input listeners.
         self.spawn_input_listeners();
@@ -136,9 +136,9 @@ impl Daemon {
                 if new_order != last_order {
                     match &new_order {
                         Some(names) => {
-                            println!("Reloaded {} character(s) from config.toml", names.len())
+                            println!("config.toml'dan {} karakter yeniden yüklendi", names.len())
                         }
-                        None => println!("Character list cleared in config.toml"),
+                        None => println!("config.toml'daki karakter listesi temizlendi"),
                     }
                     state_clone
                         .lock()
@@ -164,11 +164,11 @@ impl Daemon {
             match stream {
                 Ok(stream) => {
                     if let Err(e) = self.handle_client(stream) {
-                        eprintln!("Error handling client: {}", e);
+                        eprintln!("İstemci işlenirken hata: {}", e);
                     }
                 }
                 Err(e) => {
-                    eprintln!("Connection error: {}", e);
+                    eprintln!("Bağlantı hatası: {}", e);
                 }
             }
         }
@@ -181,8 +181,8 @@ impl Daemon {
         let wm_clone = Arc::clone(&self.wm);
         let state_clone = Arc::clone(&self.state);
         match crate::windows_input::spawn(self.config.clone(), wm_clone, state_clone) {
-            Ok(_) => println!("Windows input listeners started"),
-            Err(e) => eprintln!("Warning: Could not start Windows input listeners: {}", e),
+            Ok(_) => println!("Windows giriş dinleyicileri başlatıldı"),
+            Err(e) => eprintln!("Uyarı: Windows giriş dinleyicileri başlatılamadı: {}", e),
         }
 
         // DWM preview windows manager (gated by config; defaults to true).
@@ -196,9 +196,9 @@ impl Daemon {
                 state_clone,
                 live_clone,
             ) {
-                Ok(_) => println!("DWM preview windows started"),
+                Ok(_) => println!("DWM önizleme pencereleri başlatıldı"),
                 Err(e) => {
-                    eprintln!("Warning: Could not start preview window manager: {}", e)
+                    eprintln!("Uyarı: Önizleme pencere yöneticisi başlatılamadı: {}", e)
                 }
             }
         }

@@ -7,7 +7,7 @@ const SOCKET_PRINTNAME: &str = "nicotine.sock";
 fn socket_name() -> Result<interprocess::local_socket::Name<'static>> {
     SOCKET_PRINTNAME
         .to_ns_name::<GenericNamespaced>()
-        .context("Failed to construct named pipe name")
+        .context("Adlandırılmış pipe adı oluşturulamadı")
 }
 
 pub fn bind_listener() -> Result<interprocess::local_socket::Listener> {
@@ -15,13 +15,13 @@ pub fn bind_listener() -> Result<interprocess::local_socket::Listener> {
     ListenerOptions::new()
         .name(name)
         .create_sync()
-        .context("Failed to bind IPC listener")
+        .context("IPC dinleyicisi bağlanamadı")
 }
 
 pub fn send_line(message: &str) -> Result<()> {
     let name = socket_name()?;
     let mut stream =
-        Stream::connect(name).context("Failed to connect to nicotine daemon — is it running?")?;
+        Stream::connect(name).context("Nicotine daemon'a bağlanılamadı — çalışıyor mu?")?;
     writeln!(stream, "{}", message)?;
     stream.flush()?;
     Ok(())

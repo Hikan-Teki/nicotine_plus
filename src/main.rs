@@ -29,7 +29,7 @@ use std::sync::Arc;
 use window_manager::WindowManager;
 
 fn create_window_manager() -> Result<Arc<dyn WindowManager>> {
-    println!("Using Windows backend");
+    println!("Windows arka ucu kullanılıyor");
     Ok(Arc::new(windows_manager::WindowsManager::new()?))
 }
 
@@ -57,7 +57,7 @@ fn start_command(wm: Arc<dyn WindowManager>, config: Config) -> Result<()> {
         std::thread::spawn(move || {
             let mut daemon = Daemon::new(wm_daemon, config_daemon, live_daemon);
             if let Err(e) = daemon.run() {
-                eprintln!("Daemon error: {}", e);
+                eprintln!("Daemon hatası: {}", e);
             }
         });
         // Brief pause so the IPC socket is bound before the panel opens.
@@ -71,7 +71,7 @@ fn start_command(wm: Arc<dyn WindowManager>, config: Config) -> Result<()> {
     // push slider changes straight to the preview manager without
     // waiting for a save-to-disk round-trip.
     if let Err(e) = config_panel::run(config, live) {
-        eprintln!("Config panel error: {}", e);
+        eprintln!("Yapılandırma paneli hatası: {}", e);
     }
     Ok(())
 }
@@ -147,33 +147,33 @@ fn main() -> Result<()> {
 
     match command {
         "start" => {
-            println!("Starting Nicotine 🚬");
+            println!("Nicotine başlatılıyor 🚬");
             start_command(wm, config)?;
         }
 
         "daemon" => {
-            println!("Starting Nicotine daemon...");
+            println!("Nicotine daemon başlatılıyor...");
             let live = LiveSettings::from_config(&config);
             let mut daemon = Daemon::new(wm, config, live);
             daemon.run()?;
         }
 
         "stack" => {
-            println!("Stacking EVE windows...");
+            println!("EVE pencereleri üst üste diziliyor...");
             let windows = wm.get_eve_windows()?;
 
             println!(
-                "Centering {} EVE clients ({}x{}) on {}x{} display",
+                "{} EVE istemcisi {}x{} ekrana {}x{} boyutunda ortalanıyor",
                 windows.len(),
+                config.display_width,
+                config.display_height,
                 config.eve_width,
                 config.eve_height_adjusted(),
-                config.display_width,
-                config.display_height
             );
 
             wm.stack_windows(&windows, &config)?;
 
-            println!("✓ Stacked {} windows", windows.len());
+            println!("✓ {} pencere dizildi", windows.len());
         }
 
         "cycle-forward" | "forward" | "f" => {
@@ -191,9 +191,9 @@ fn main() -> Result<()> {
         }
 
         "stop" => {
-            println!("Stopping Nicotine...");
+            println!("Nicotine durduruluyor...");
             stop_command();
-            println!("✓ Nicotine stopped");
+            println!("✓ Nicotine durduruldu");
         }
 
         "init-config" => {
@@ -225,24 +225,23 @@ fn main() -> Result<()> {
                 println!();
                 println!("🚬 N I C O T I N E 🚬");
                 println!();
-                println!("Questions or suggestions?");
-                println!("Open a Github issue for questions or suggestions");
+                println!("Soru veya öneriler için GitHub'da issue açabilirsiniz.");
                 println!();
-                println!("Usage:");
-                println!("  nicotine start         - Start everything (daemon + previews)");
-                println!("  nicotine stop          - Stop all Nicotine processes");
-                println!("  nicotine stack         - Stack all EVE windows");
-                println!("  nicotine forward       - Cycle forward");
-                println!("  nicotine backward      - Cycle backward");
-                println!("  nicotine switch N      - Switch to client N (targeted cycling)");
-                println!("  nicotine N             - Shorthand for switch N");
-                println!("  nicotine init-config   - Create default config.toml");
+                println!("Kullanım:");
+                println!("  nicotine start         - Her şeyi başlat (daemon + önizlemeler)");
+                println!("  nicotine stop          - Tüm Nicotine süreçlerini durdur");
+                println!("  nicotine stack         - Tüm EVE pencerelerini üst üste diz");
+                println!("  nicotine forward       - İleri geçiş");
+                println!("  nicotine backward      - Geri geçiş");
+                println!("  nicotine switch N      - N numaralı istemciye geç (hedefli geçiş)");
+                println!("  nicotine N             - switch N için kısa yol");
+                println!("  nicotine init-config   - Varsayılan config.toml oluştur");
                 println!();
-                println!("Advanced:");
-                println!("  nicotine daemon        - Start daemon only");
+                println!("Gelişmiş:");
+                println!("  nicotine daemon        - Yalnızca daemon'u başlat");
                 println!();
-                println!("Quick start:");
-                println!("  nicotine start         # Starts in background automatically");
+                println!("Hızlı başlangıç:");
+                println!("  nicotine start         # Arka planda otomatik çalışır");
             }
         }
     }

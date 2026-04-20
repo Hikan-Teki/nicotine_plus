@@ -251,7 +251,7 @@ impl CycleState {
             let target_idx = target - 1;
             if target_idx >= characters.len() {
                 anyhow::bail!(
-                    "Target {} is out of range (only {} characters configured)",
+                    "Hedef {} geçersiz (yalnızca {} karakter tanımlı)",
                     target,
                     characters.len()
                 );
@@ -263,14 +263,14 @@ impl CycleState {
                 .iter()
                 .position(|w| w.title == *target_name)
                 .ok_or_else(|| {
-                    anyhow::anyhow!("Character '{}' not found in active windows", target_name)
+                    anyhow::anyhow!("'{}' karakteri açık pencerelerde bulunamadı", target_name)
                 })?
         } else {
             // Fall back to window list order
             let target_idx = target - 1; // Convert to 0-indexed
             if target_idx >= self.windows.len() {
                 anyhow::bail!(
-                    "Target {} is out of range (only {} windows)",
+                    "Hedef {} geçersiz (yalnızca {} pencere açık)",
                     target,
                     self.windows.len()
                 );

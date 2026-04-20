@@ -291,8 +291,8 @@ impl Config {
         if let Some(parent) = config_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let contents = toml::to_string_pretty(self).context("Failed to serialize config")?;
-        fs::write(&config_path, contents).context("Failed to write config.toml")?;
+        let contents = toml::to_string_pretty(self).context("Yapılandırma serileştirilemedi")?;
+        fs::write(&config_path, contents).context("config.toml yazılamadı")?;
         Ok(())
     }
 
@@ -336,12 +336,12 @@ impl Config {
         let config_path = Self::config_path();
 
         if let Ok(contents) = fs::read_to_string(&config_path) {
-            return toml::from_str(&contents).context("Failed to parse config.toml");
+            return toml::from_str(&contents).context("config.toml ayrıştırılamadı");
         }
 
-        println!("Generating config based on your display...");
+        println!("Ekranınıza göre yapılandırma oluşturuluyor...");
         let (display_width, display_height) = Self::detect_display_size();
-        println!("Detected display: {}x{}", display_width, display_height);
+        println!("Algılanan ekran: {}x{}", display_width, display_height);
 
         let config = Self::build_default(display_width, display_height);
 
@@ -350,8 +350,8 @@ impl Config {
         }
         let contents = toml::to_string_pretty(&config)?;
         fs::write(&config_path, contents)?;
-        println!("Created config: {}", config_path.display());
-        println!("Edit it to customize window sizes and positions");
+        println!("Yapılandırma oluşturuldu: {}", config_path.display());
+        println!("Pencere boyutlarını ve konumlarını özelleştirmek için düzenleyebilirsiniz");
 
         Ok(config)
     }
@@ -367,7 +367,7 @@ impl Config {
         }
         let contents = toml::to_string_pretty(&config)?;
         fs::write(&config_path, contents)?;
-        println!("Created config: {}", config_path.display());
+        println!("Yapılandırma oluşturuldu: {}", config_path.display());
         Ok(())
     }
 

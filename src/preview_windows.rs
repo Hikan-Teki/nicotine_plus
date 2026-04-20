@@ -424,7 +424,7 @@ impl PreviewManager {
                     let _ = self.rebind_preview(window);
                 }
             } else if let Err(e) = self.create_preview(window) {
-                eprintln!("Failed to create preview for {}: {}", window.title, e);
+                eprintln!("{} için önizleme oluşturulamadı: {}", window.title, e);
             }
         }
 
@@ -449,7 +449,7 @@ impl PreviewManager {
         // was torn down somehow.
         if self.list.is_none() {
             if let Err(e) = self.create_list_window() {
-                eprintln!("Failed to create list window: {}", e);
+                eprintln!("Liste penceresi oluşturulamadı: {}", e);
                 return;
             }
         }
@@ -1349,7 +1349,7 @@ pub fn spawn(
 ) -> Result<JoinHandle<()>> {
     let handle = std::thread::spawn(move || {
         if let Err(e) = run_manager(config, wm, state, live) {
-            eprintln!("Preview window manager exited with error: {}", e);
+            eprintln!("Önizleme pencere yöneticisi hatayla sonlandı: {}", e);
         }
     });
     Ok(handle)

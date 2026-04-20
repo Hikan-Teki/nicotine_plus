@@ -355,7 +355,7 @@ impl eframe::App for ConfigPanel {
                             Some(crate::version_check::UpdateStatus::Outdated { version, url }) => {
                                 ui.hyperlink_to(
                                     egui::RichText::new(format!(
-                                        "NEW VERSION AVAILABLE (v{})",
+                                        "YENİ SÜRÜM MEVCUT (v{})",
                                         version
                                     ))
                                     .strong()
@@ -365,7 +365,7 @@ impl eframe::App for ConfigPanel {
                             }
                             Some(crate::version_check::UpdateStatus::UpToDate) => {
                                 ui.label(
-                                    egui::RichText::new("LATEST VERSION")
+                                    egui::RichText::new("GÜNCEL SÜRÜM")
                                         .strong()
                                         .color(NICOTINE_GREEN),
                                 );
@@ -427,7 +427,7 @@ impl eframe::App for ConfigPanel {
             let elapsed = changed_at.elapsed();
             if elapsed >= AUTOSAVE_DEBOUNCE {
                 if let Err(e) = self.config.save() {
-                    eprintln!("config autosave failed: {}", e);
+                    eprintln!("config otomatik kayıt hatası: {}", e);
                 }
                 self.last_change = None;
             } else {
@@ -449,12 +449,13 @@ impl ConfigPanel {
     }
 
     fn draw_display_mode_section(&mut self, ui: &mut egui::Ui) {
-        Self::draw_section_header(ui, "Display Mode");
+        Self::draw_section_header(ui, "Görünüm Modu");
         ui.label(
             egui::RichText::new(
-                "How Nicotine shows your running clients on screen. \
-                 Preview windows mirror each client live; the list view is \
-                 a compact always-on-top window of names.",
+                "Nicotine, çalışan istemcilerinizi ekranda nasıl göstersin. \
+                 Önizleme pencereleri her istemciyi canlı yansıtır; liste \
+                 görünümü ise her zaman en üstte duran, adları içeren \
+                 kompakt bir penceredir.",
             )
             .size(11.0)
             .color(NICOTINE_BLACK),
@@ -466,13 +467,13 @@ impl ConfigPanel {
             ui.radio_value(
                 &mut self.config.display_mode,
                 DisplayMode::Previews,
-                "Preview windows",
+                "Önizleme pencereleri",
             );
             ui.add_space(12.0);
             ui.radio_value(
                 &mut self.config.display_mode,
                 DisplayMode::List,
-                "Client list",
+                "İstemci listesi",
             );
         });
         if self.config.display_mode != prev {
@@ -486,7 +487,7 @@ impl ConfigPanel {
         let prev_lock = self.config.positions_locked;
         ui.checkbox(
             &mut self.config.positions_locked,
-            "Lock positions (drag disabled on previews and list)",
+            "Konumları kilitle (önizleme ve listede sürükleme devre dışı)",
         );
         if self.config.positions_locked != prev_lock {
             self.touch();
@@ -497,13 +498,13 @@ impl ConfigPanel {
     }
 
     fn draw_characters_section(&mut self, ui: &mut egui::Ui) {
-        Self::draw_section_header(ui, "Cycle Order");
+        Self::draw_section_header(ui, "Geçiş Sırası");
         ui.label(
             egui::RichText::new(
-                "Characters cycle in the order shown. Uncheck \"in cycle\" to keep a \
-                 character visible with its hotkey but skip it during forward/backward \
-                 cycling (e.g. a scout). Names must match EVE's window title exactly \
-                 (the part after \"EVE - \").",
+                "Karakterler burada gösterilen sırada döner. \"Döngüde\" kutucuğunu kapatırsanız \
+                 karakter listede ve kısayolunda görünmeye devam eder, ama ileri/geri döngüde \
+                 atlanır (örneğin bir scout için). İsimler, EVE'in pencere başlığıyla birebir \
+                 aynı olmalı (\"EVE - \" kısmından sonraki ad).",
             )
             .size(11.0)
             .color(NICOTINE_BLACK),
@@ -557,13 +558,13 @@ impl ConfigPanel {
                 // In-cycle toggle — scout characters get their hotkey
                 // and their list row, but are skipped by forward/back.
                 let prev_in_cycle = self.config.characters[idx].in_cycle;
-                ui.checkbox(&mut self.config.characters[idx].in_cycle, "in cycle");
+                ui.checkbox(&mut self.config.characters[idx].in_cycle, "döngüde");
                 if self.config.characters[idx].in_cycle != prev_in_cycle {
                     dirty = true;
                 }
 
                 ui.add_space(8.0);
-                ui.label("Hotkey:");
+                ui.label("Kısayol:");
 
                 // Modifier checkboxes (Ctrl / Shift / Alt). Creating a
                 // placeholder entry with vk=0 is how we preserve a
@@ -600,7 +601,7 @@ impl ConfigPanel {
                     .get(&name)
                     .filter(|h| h.vk != 0)
                     .map(hotkey_label)
-                    .unwrap_or_else(|| "none".into());
+                    .unwrap_or_else(|| "yok".into());
                 self.draw_bind_button_sized(
                     ui,
                     &CaptureTarget::Character(name.clone()),
@@ -637,7 +638,7 @@ impl ConfigPanel {
 
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.label("Add:");
+            ui.label("Ekle:");
             let response = ui.text_edit_singleline(&mut self.new_character_buffer);
             let add_clicked = ui.button("+").clicked();
             let enter_pressed =
@@ -653,12 +654,12 @@ impl ConfigPanel {
     }
 
     fn draw_hotkeys_section(&mut self, ui: &mut egui::Ui) {
-        Self::draw_section_header(ui, "Keyboard Hotkeys");
+        Self::draw_section_header(ui, "Klavye Kısayolları");
 
         let prev_enable = self.config.enable_keyboard_buttons;
         ui.checkbox(
             &mut self.config.enable_keyboard_buttons,
-            "Enable keyboard cycling",
+            "Klavye ile geçişi etkinleştir",
         );
         if self.config.enable_keyboard_buttons != prev_enable {
             self.touch();
@@ -666,7 +667,7 @@ impl ConfigPanel {
 
         ui.add_enabled_ui(self.config.enable_keyboard_buttons, |ui| {
             ui.horizontal(|ui| {
-                ui.label("Forward:");
+                ui.label("İleri:");
                 self.draw_bind_button(
                     ui,
                     &CaptureTarget::ForwardKey,
@@ -674,7 +675,7 @@ impl ConfigPanel {
                 );
             });
             ui.horizontal(|ui| {
-                ui.label("Backward:");
+                ui.label("Geri:");
                 self.draw_bind_button(
                     ui,
                     &CaptureTarget::BackwardKey,
@@ -682,22 +683,22 @@ impl ConfigPanel {
                 );
             });
             ui.horizontal(|ui| {
-                ui.label("Modifier:");
+                ui.label("Değiştirici:");
                 let label = match self.config.modifier_key {
                     Some(vk) => vk_to_label(vk),
-                    None => "None".to_string(),
+                    None => "Yok".to_string(),
                 };
                 self.draw_bind_button(ui, &CaptureTarget::ModifierKey, label);
-                if self.config.modifier_key.is_some() && ui.button("Clear").clicked() {
+                if self.config.modifier_key.is_some() && ui.button("Temizle").clicked() {
                     self.config.modifier_key = None;
                     self.touch();
                 }
             });
             ui.label(
                 egui::RichText::new(
-                    "Click a binding to record the next key you press. Esc cancels. \
-                     Set both keys to the same value with a modifier to cycle backward \
-                     via modifier+key (e.g. Tab + Shift+Tab).",
+                    "Bir kısayolu değiştirmek için üzerine tıklayın ve bir sonraki tuşa basın. \
+                     Esc iptal eder. İleri ve geri tuşlarını aynı yapıp bir değiştirici \
+                     atayarak tek tuşla çift yönlü geçiş kurabilirsiniz (örn. Tab + Shift+Tab).",
                 )
                 .size(10.0)
                 .color(NICOTINE_BLACK),
@@ -708,16 +709,16 @@ impl ConfigPanel {
         let prev_mouse = self.config.enable_mouse_buttons;
         ui.checkbox(
             &mut self.config.enable_mouse_buttons,
-            "Cycle on mouse side buttons (XBUTTON1/XBUTTON2)",
+            "Fare yan tuşlarıyla geçiş yap (XBUTTON1/XBUTTON2)",
         );
         if self.config.enable_mouse_buttons != prev_mouse {
             self.touch();
         }
         ui.label(
             egui::RichText::new(
-                "Off by default. Turn on only if you don't already remap your mouse \
-                 side buttons via driver software (Logi Options+, Razer Synapse, etc.) \
-                 — otherwise this will hijack the buttons in browsers/games too.",
+                "Varsayılan olarak kapalıdır. Yalnızca fare yan tuşlarınızı driver yazılımıyla \
+                 (Logi Options+, Razer Synapse vb.) zaten yeniden atamadıysanız açın — aksi \
+                 hâlde bu ayar tarayıcı/oyun içindeki ileri-geri tuşlarını da ele geçirir.",
             )
             .size(10.0)
             .color(NICOTINE_BLACK),
@@ -740,7 +741,7 @@ impl ConfigPanel {
     ) {
         let is_capturing = self.capturing.as_ref() == Some(target);
         let text = if is_capturing {
-            "[press key — Esc]".to_string()
+            "[tuşa bas — Esc]".to_string()
         } else {
             label
         };
@@ -760,9 +761,9 @@ impl ConfigPanel {
     }
 
     fn draw_previews_section(&mut self, ui: &mut egui::Ui) {
-        Self::draw_section_header(ui, "Preview Windows");
+        Self::draw_section_header(ui, "Önizleme Pencereleri");
         let prev_show = self.config.show_previews;
-        ui.checkbox(&mut self.config.show_previews, "Show preview windows");
+        ui.checkbox(&mut self.config.show_previews, "Önizleme pencerelerini göster");
         if self.config.show_previews != prev_show {
             self.touch();
         }
@@ -774,7 +775,7 @@ impl ConfigPanel {
             let prev_w = self.config.preview_width;
             let prev_h = self.config.preview_height;
             ui.horizontal(|ui| {
-                ui.label("Width:");
+                ui.label("Genişlik:");
                 ui.add(
                     egui::Slider::new(&mut self.config.preview_width, 120..=800)
                         .suffix(" px")
@@ -783,7 +784,7 @@ impl ConfigPanel {
                 );
             });
             ui.horizontal(|ui| {
-                ui.label("Height:");
+                ui.label("Yükseklik:");
                 ui.add(
                     egui::Slider::new(&mut self.config.preview_height, 80..=600)
                         .suffix(" px")
