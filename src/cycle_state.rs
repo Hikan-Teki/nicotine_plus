@@ -53,9 +53,6 @@ impl CycleState {
     /// is set, returns only logged-in configured characters in that order;
     /// otherwise falls back to whatever order the window manager reports.
     /// Used by the list-view renderer so rows stay put as you cycle.
-    /// Windows-only consumer (preview manager); kept cross-platform so
-    /// future Linux UI can reuse it.
-    #[cfg_attr(unix, allow(dead_code))]
     pub fn get_ordered_windows(&self) -> Vec<EveWindow> {
         self.cycle_indices()
             .into_iter()
@@ -66,7 +63,6 @@ impl CycleState {
     /// Activate the EVE client whose title exactly matches `name`.
     /// No-op if that character isn't currently logged in. Used by
     /// per-character global hotkeys (Windows only).
-    #[cfg_attr(unix, allow(dead_code))]
     pub fn switch_to_character(
         &mut self,
         name: &str,
@@ -175,10 +171,9 @@ impl CycleState {
         let _ = fs::write(paths::index_file_path(), self.current_index.to_string());
     }
 
-    // The next three methods are called by the Linux overlay and the
-    // unit tests but not by any release-mode Windows code path.
-    // `#[allow(dead_code)]` keeps them defined cross-platform without
-    // tripping the Windows `cargo clippy -- -D warnings` job.
+    // The next three methods are only touched by the unit tests.
+    // `#[allow(dead_code)]` keeps them available without tripping the
+    // clippy `-D warnings` job.
 
     #[allow(dead_code)]
     pub fn read_index_from_file() -> Option<usize> {
@@ -488,10 +483,6 @@ mod tests {
 
         fn get_active_window(&self) -> anyhow::Result<u32> {
             Ok(0)
-        }
-
-        fn find_window_by_title(&self, _title: &str) -> anyhow::Result<Option<u32>> {
-            Ok(None)
         }
 
         fn minimize_window(&self, _window_id: u32) -> anyhow::Result<()> {

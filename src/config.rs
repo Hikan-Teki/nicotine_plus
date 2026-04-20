@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 /// A single per-character hotkey binding. `vk` is a Win32 Virtual-Key
-/// code (or evdev code on Linux); `modifier` is an optional second VK
-/// that must be held down (typically Shift/Ctrl/Alt).
+/// code; `modifier` is an optional second VK that must be held down
+/// (typically Shift/Ctrl/Alt).
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct CharacterHotkey {
     pub vk: u16,
@@ -29,11 +29,7 @@ pub enum DisplayMode {
 /// manager resizes windows as soon as these change, without waiting for a
 /// save-to-disk + hot-reload cycle. Shared via Arc<Mutex<>> between the
 /// config panel (writer) and the preview manager (reader).
-// LiveSettings fields are read by the Windows preview manager only.
-// On Linux they're allocated and written by `from_config` but never
-// read, so suppress the unused-field lint there.
 #[derive(Debug, Clone)]
-#[cfg_attr(unix, allow(dead_code))]
 pub struct LiveSettings {
     pub preview_width: u32,
     pub preview_height: u32,
@@ -62,42 +58,32 @@ pub struct Config {
     pub panel_height: u32,
     pub eve_width: u32,
     pub eve_height: u32,
-    pub overlay_x: f32,
-    pub overlay_y: f32,
     #[serde(default = "default_enable_mouse")]
     pub enable_mouse_buttons: bool,
     #[serde(default = "default_forward_button")]
-    pub forward_button: u16, // BTN_SIDE (mouse button 9)
+    pub forward_button: u16, // XBUTTON2 (forward side button)
     #[serde(default = "default_backward_button")]
-    pub backward_button: u16, // BTN_EXTRA (mouse button 8)
+    pub backward_button: u16, // XBUTTON1 (backward side button)
     #[serde(default = "default_enable_keyboard")]
     pub enable_keyboard_buttons: bool,
     #[serde(default = "default_forward_key")]
-    pub forward_key: u16, // KEY_TAB (15) - Tab for forward, Shift+Tab for backward
+    pub forward_key: u16, // VK_F11
     #[serde(default = "default_backward_key")]
-    pub backward_key: u16, // KEY_TAB (15) - Track SHIFT modifier internally
-    #[serde(default = "default_show_overlay")]
-    pub show_overlay: bool,
-    #[serde(default = "default_mouse_device_name")]
-    pub mouse_device_name: Option<String>,
-    #[serde(default = "default_mouse_device_path")]
-    pub mouse_device_path: Option<String>,
+    pub backward_key: u16, // VK_F10
     #[serde(default = "default_minimize_inactive")]
     pub minimize_inactive: bool,
-    #[serde(default = "default_keyboard_device_path")]
-    pub keyboard_device_path: Option<String>,
     #[serde(default = "default_modifier_key")]
     pub modifier_key: Option<u16>,
-    /// Width of preview windows in pixels (Windows only). Single global value
-    /// — every preview gets the same size. Aspect ratio is preserved on the
+    /// Width of preview windows in pixels. Single global value — every
+    /// preview gets the same size. Aspect ratio is preserved on the
     /// thumbnail; the window is sized exactly as configured.
     #[serde(default = "default_preview_width")]
     pub preview_width: u32,
-    /// Height of preview windows in pixels (Windows only).
+    /// Height of preview windows in pixels.
     #[serde(default = "default_preview_height")]
     pub preview_height: u32,
-    /// Whether DWM preview windows are spawned at all (Windows only). When
-    /// false, the daemon runs headless and you cycle via hotkeys / CLI only.
+    /// Whether DWM preview windows are spawned at all. When false, the
+    /// daemon runs headless and you cycle via hotkeys / CLI only.
     #[serde(default = "default_show_previews")]
     pub show_previews: bool,
     /// Ordered list of EVE character names. Forward/backward cycling
@@ -122,89 +108,36 @@ pub struct Config {
     pub character_hotkeys: HashMap<String, CharacterHotkey>,
 }
 
-#[cfg(unix)]
-fn default_enable_mouse() -> bool {
-    true
-}
-
-// Off by default on Windows — most users remap side buttons at the
-// driver level (Logi Options+, etc.) and use Nicotine's keyboard
-// hotkeys instead. When the native hook is on, it intercepts XBUTTON1/2
-// from games and browsers (back/forward) which surprises users who
-// didn't ask for cycling there.
-#[cfg(windows)]
+// Off by default — most users remap side buttons at the driver level
+// (Logi Options+, etc.) and use keyboard hotkeys instead. When the
+// native hook is on, it intercepts XBUTTON1/2 from games and browsers
+// (back/forward) which surprises users who didn't ask for cycling there.
 fn default_enable_mouse() -> bool {
     false
 }
 
-#[cfg(unix)]
-fn default_forward_button() -> u16 {
-    276 // BTN_SIDE (forward button, mouse button 9) — evdev code
-}
-
-#[cfg(windows)]
 fn default_forward_button() -> u16 {
     2 // XBUTTON2 (forward side button)
 }
 
-#[cfg(unix)]
-fn default_backward_button() -> u16 {
-    275 // BTN_EXTRA (backward button, mouse button 8) — evdev code
-}
-
-#[cfg(windows)]
 fn default_backward_button() -> u16 {
     1 // XBUTTON1 (backward side button)
 }
 
-#[cfg(unix)]
-fn default_enable_keyboard() -> bool {
-    false // Disabled by default to avoid conflicts with games that use Tab
-}
-
-#[cfg(windows)]
 fn default_enable_keyboard() -> bool {
     true // F10/F11 are uncommon enough to enable by default for cycling
 }
 
-#[cfg(unix)]
-fn default_forward_key() -> u16 {
-    15 // KEY_TAB — evdev code
-}
-
-#[cfg(windows)]
 fn default_forward_key() -> u16 {
     0x7A // VK_F11
 }
 
-#[cfg(unix)]
-fn default_backward_key() -> u16 {
-    15 // KEY_TAB (Modifier applied if set) — evdev code
-}
-
-#[cfg(windows)]
 fn default_backward_key() -> u16 {
     0x79 // VK_F10
 }
 
-fn default_show_overlay() -> bool {
-    true
-}
-
-fn default_mouse_device_name() -> Option<String> {
-    None
-}
-
-fn default_mouse_device_path() -> Option<String> {
-    None
-}
-
 fn default_minimize_inactive() -> bool {
     false
-}
-
-fn default_keyboard_device_path() -> Option<String> {
-    None
 }
 
 fn default_modifier_key() -> Option<u16> {
@@ -241,9 +174,7 @@ impl Config {
     }
 
     /// Persist the current Config back to disk. Used by the config panel
-    /// to commit user edits. Only called from the Windows config panel,
-    /// hence the dead-code allow on Linux.
-    #[cfg_attr(unix, allow(dead_code))]
+    /// to commit user edits.
     pub fn save(&self) -> Result<()> {
         let config_path = Self::config_path();
         if let Some(parent) = config_path.parent() {
@@ -254,31 +185,6 @@ impl Config {
         Ok(())
     }
 
-    #[cfg(unix)]
-    fn detect_display_size() -> (u32, u32) {
-        if let Ok(output) = std::process::Command::new("xrandr")
-            .args(["--current"])
-            .output()
-        {
-            if let Ok(stdout) = String::from_utf8(output.stdout) {
-                for line in stdout.lines() {
-                    if line.contains("*") && line.contains("x") {
-                        // Parse line like: "7680x2160     60.00*+"
-                        if let Some(resolution) = line.split_whitespace().next() {
-                            if let Some((w, h)) = resolution.split_once('x') {
-                                if let (Ok(width), Ok(height)) = (w.parse(), h.parse()) {
-                                    return (width, height);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        (1920, 1080)
-    }
-
-    #[cfg(windows)]
     fn detect_display_size() -> (u32, u32) {
         use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
         let w = unsafe { GetSystemMetrics(SM_CXSCREEN) };
@@ -297,19 +203,13 @@ impl Config {
             panel_height: 0,
             eve_width: (display_width as f32 * 0.54) as u32, // ~54% of width
             eve_height: display_height,
-            overlay_x: 10.0,
-            overlay_y: 10.0,
             enable_mouse_buttons: default_enable_mouse(),
             forward_button: default_forward_button(),
             backward_button: default_backward_button(),
             enable_keyboard_buttons: default_enable_keyboard(),
             forward_key: default_forward_key(),
             backward_key: default_backward_key(),
-            show_overlay: default_show_overlay(),
-            mouse_device_name: default_mouse_device_name(),
-            mouse_device_path: default_mouse_device_path(),
             minimize_inactive: default_minimize_inactive(),
-            keyboard_device_path: default_keyboard_device_path(),
             modifier_key: default_modifier_key(),
             preview_width: default_preview_width(),
             preview_height: default_preview_height(),
@@ -369,27 +269,20 @@ impl Config {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_eve_height_adjusted_with_panel() {
-        let config = Config {
+    fn sample_config() -> Config {
+        Config {
             display_width: 1920,
             display_height: 1080,
             panel_height: 40,
             eve_width: 1000,
             eve_height: 1080,
-            overlay_x: 10.0,
-            overlay_y: 10.0,
-            enable_mouse_buttons: true,
-            forward_button: 276,
-            backward_button: 275,
-            enable_keyboard_buttons: false,
-            forward_key: 15,
-            backward_key: 15,
-            show_overlay: true,
-            mouse_device_name: None,
-            mouse_device_path: None,
+            enable_mouse_buttons: false,
+            forward_button: 2,
+            backward_button: 1,
+            enable_keyboard_buttons: true,
+            forward_key: 0x7A,
+            backward_key: 0x79,
             minimize_inactive: false,
-            keyboard_device_path: None,
             modifier_key: None,
             preview_width: 320,
             preview_height: 180,
@@ -398,76 +291,31 @@ mod tests {
             display_mode: DisplayMode::Previews,
             positions_locked: false,
             character_hotkeys: HashMap::new(),
-        };
+        }
+    }
 
+    #[test]
+    fn test_eve_height_adjusted_with_panel() {
+        let config = sample_config();
         // Height should be: 1080 - 40 = 1040
         assert_eq!(config.eve_height_adjusted(), 1040);
     }
 
     #[test]
     fn test_eve_height_adjusted_without_panel() {
-        let config = Config {
-            display_width: 1920,
-            display_height: 1080,
-            panel_height: 0,
-            eve_width: 1000,
-            eve_height: 1080,
-            overlay_x: 10.0,
-            overlay_y: 10.0,
-            enable_mouse_buttons: true,
-            forward_button: 276,
-            backward_button: 275,
-            enable_keyboard_buttons: false,
-            forward_key: 15,
-            backward_key: 15,
-            show_overlay: true,
-            mouse_device_name: None,
-            mouse_device_path: None,
-            minimize_inactive: false,
-            keyboard_device_path: None,
-            modifier_key: None,
-            preview_width: 320,
-            preview_height: 180,
-            show_previews: true,
-            characters: Vec::new(),
-            display_mode: DisplayMode::Previews,
-            positions_locked: false,
-            character_hotkeys: HashMap::new(),
-        };
-
+        let mut config = sample_config();
+        config.panel_height = 0;
         assert_eq!(config.eve_height_adjusted(), 1080);
     }
 
     #[test]
     fn test_config_serialization() {
-        let config = Config {
-            display_width: 7680,
-            display_height: 2160,
-            panel_height: 0,
-            eve_width: 4147,
-            eve_height: 2160,
-            overlay_x: 10.0,
-            overlay_y: 10.0,
-            enable_mouse_buttons: true,
-            forward_button: 276,
-            backward_button: 275,
-            enable_keyboard_buttons: false,
-            forward_key: 15,
-            backward_key: 15,
-            show_overlay: true,
-            mouse_device_name: None,
-            mouse_device_path: None,
-            minimize_inactive: false,
-            keyboard_device_path: None,
-            modifier_key: None,
-            preview_width: 320,
-            preview_height: 180,
-            show_previews: true,
-            characters: Vec::new(),
-            display_mode: DisplayMode::Previews,
-            positions_locked: false,
-            character_hotkeys: HashMap::new(),
-        };
+        let mut config = sample_config();
+        config.display_width = 7680;
+        config.display_height = 2160;
+        config.panel_height = 0;
+        config.eve_width = 4147;
+        config.eve_height = 2160;
 
         let toml_str = toml::to_string(&config).unwrap();
         let deserialized: Config = toml::from_str(&toml_str).unwrap();

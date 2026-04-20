@@ -1,41 +1,23 @@
-// Release builds on Windows run under the GUI subsystem so Windows
-// doesn't allocate a console (or launch Windows Terminal) when the
-// user double-clicks nicotine.exe. Debug builds stay on the default
-// CONSOLE subsystem so `cargo run` / `cargo xwin run` during dev still
-// prints stdout. The tradeoff: release-binary runs from PowerShell no
-// longer show println! output in the shell. That's OK — the app is
-// GUI-first; the daemon subcommand still works, it just runs headless.
-#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+// Release builds run under the GUI subsystem so Windows doesn't
+// allocate a console (or launch Windows Terminal) when the user
+// double-clicks nicotine.exe. Debug builds stay on the default CONSOLE
+// subsystem so `cargo run` during dev still prints stdout. The tradeoff:
+// release-binary runs from PowerShell no longer show println! output in
+// the shell. That's OK — the app is GUI-first; the daemon subcommand
+// still works, it just runs headless.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod config;
-#[cfg(windows)]
 mod config_panel;
 mod cycle_state;
 mod daemon;
 mod ipc;
 mod lock;
 mod paths;
-mod telemetry;
-mod window_manager;
-
-mod version_check;
-
-#[cfg(unix)]
-mod keyboard_listener;
-#[cfg(unix)]
-mod mouse_listener;
-#[cfg(unix)]
-mod overlay;
-#[cfg(unix)]
-mod wayland_backends;
-#[cfg(unix)]
-mod x11_manager;
-
-#[cfg(windows)]
 mod preview_windows;
-#[cfg(windows)]
+mod version_check;
+mod window_manager;
 mod windows_input;
-#[cfg(windows)]
 mod windows_manager;
 
 use anyhow::Result;
@@ -44,66 +26,8 @@ use cycle_state::CycleState;
 use daemon::Daemon;
 use std::env;
 use std::sync::Arc;
-#[cfg(unix)]
-use std::sync::Mutex;
 use window_manager::WindowManager;
 
-#[cfg(unix)]
-use daemonize::Daemonize;
-#[cfg(unix)]
-use overlay::run_overlay;
-#[cfg(unix)]
-use wayland_backends::{HyprlandManager, KWinManager, SwayManager};
-#[cfg(unix)]
-use window_manager::{
-    detect_display_server, detect_wayland_compositor, DisplayServer, WaylandCompositor,
-};
-#[cfg(unix)]
-use x11_manager::X11Manager;
-
-#[cfg(unix)]
-fn create_window_manager() -> Result<Arc<dyn WindowManager>> {
-    let display_server = detect_display_server();
-
-    match display_server {
-        DisplayServer::X11 => {
-            println!("Detected X11 display server");
-            Ok(Arc::new(X11Manager::new()?))
-        }
-        DisplayServer::Wayland => {
-            let compositor = detect_wayland_compositor();
-            println!(
-                "Detected Wayland display server with {:?} compositor",
-                compositor
-            );
-
-            match compositor {
-                WaylandCompositor::Kde => {
-                    println!("Using KDE/KWin backend");
-                    Ok(Arc::new(KWinManager::new()?))
-                }
-                WaylandCompositor::Sway => {
-                    println!("Using Sway backend");
-                    Ok(Arc::new(SwayManager::new()?))
-                }
-                WaylandCompositor::Hyprland => {
-                    println!("Using Hyprland backend");
-                    Ok(Arc::new(HyprlandManager::new()?))
-                }
-                WaylandCompositor::Gnome => {
-                    anyhow::bail!("GNOME Shell is not yet supported due to restrictive window management APIs")
-                }
-                WaylandCompositor::Other => {
-                    anyhow::bail!(
-                        "Unknown Wayland compositor. Supported: KDE Plasma, Sway, Hyprland"
-                    )
-                }
-            }
-        }
-    }
-}
-
-#[cfg(windows)]
 fn create_window_manager() -> Result<Arc<dyn WindowManager>> {
     println!("Using Windows backend");
     Ok(Arc::new(windows_manager::WindowsManager::new()?))
@@ -115,49 +39,6 @@ enum CycleOp {
     Switch(usize),
 }
 
-#[cfg(unix)]
-fn start_command(wm: Arc<dyn WindowManager>, config: Config) -> Result<()> {
-    let live = LiveSettings::from_config(&config);
-    let daemonize = Daemonize::new().working_directory("/tmp").umask(0o027);
-
-    match daemonize.start() {
-        Ok(_) => {
-            let wm_daemon = Arc::clone(&wm);
-            let config_daemon = config.clone();
-            let live_daemon = Arc::clone(&live);
-            let daemon_thread = std::thread::spawn(move || {
-                let mut daemon = Daemon::new(wm_daemon, config_daemon, live_daemon);
-                if let Err(e) = daemon.run() {
-                    eprintln!("Daemon error: {}", e);
-                }
-            });
-
-            std::thread::sleep(std::time::Duration::from_millis(100));
-
-            if config.show_overlay {
-                let state = Arc::new(Mutex::new(CycleState::new()));
-                if let Ok(windows) = wm.get_eve_windows() {
-                    state.lock().unwrap().update_windows(windows);
-                }
-
-                if let Err(e) = run_overlay(wm, state, config.overlay_x, config.overlay_y, config) {
-                    eprintln!("Overlay error: {}", e);
-                    std::process::exit(1);
-                }
-            } else {
-                println!("Overlay disabled - daemon running in background");
-                daemon_thread.join().unwrap();
-            }
-            Ok(())
-        }
-        Err(e) => {
-            eprintln!("Failed to daemonize: {}", e);
-            std::process::exit(1);
-        }
-    }
-}
-
-#[cfg(windows)]
 fn start_command(wm: Arc<dyn WindowManager>, config: Config) -> Result<()> {
     let live = LiveSettings::from_config(&config);
 
@@ -195,17 +76,6 @@ fn start_command(wm: Arc<dyn WindowManager>, config: Config) -> Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
-fn stop_command() {
-    let _ = std::process::Command::new("pkill")
-        .arg("-9")
-        .arg("nicotine")
-        .output();
-    let _ = std::fs::remove_file("/tmp/nicotine.sock");
-    let _ = std::fs::remove_file(paths::lock_file_path());
-}
-
-#[cfg(windows)]
 fn stop_command() {
     // Ask the daemon to quit cleanly; ignore errors (it may not be running).
     let _ = ipc::send_line("quit");
@@ -262,7 +132,6 @@ fn main() -> Result<()> {
     // awareness declaration. Ignoring the Result is intentional: the
     // call can fail harmlessly if awareness was already set (e.g. by a
     // hosting process) and we have no recovery.
-    #[cfg(windows)]
     unsafe {
         use windows::Win32::UI::HiDpi::{
             SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_SYSTEM_AWARE,
@@ -279,12 +148,6 @@ fn main() -> Result<()> {
     match command {
         "start" => {
             println!("Starting Nicotine 🚬");
-
-            #[cfg(unix)]
-            if let Ok(Some((new_version, url))) = version_check::check_for_updates() {
-                version_check::print_update_notification(&new_version, &url);
-            }
-
             start_command(wm, config)?;
         }
 
@@ -293,21 +156,6 @@ fn main() -> Result<()> {
             let live = LiveSettings::from_config(&config);
             let mut daemon = Daemon::new(wm, config, live);
             daemon.run()?;
-        }
-
-        #[cfg(unix)]
-        "overlay" => {
-            println!("Starting Nicotine Overlay...");
-            let state = Arc::new(Mutex::new(CycleState::new()));
-
-            if let Ok(windows) = wm.get_eve_windows() {
-                state.lock().unwrap().update_windows(windows);
-            }
-
-            if let Err(e) = run_overlay(wm, state, config.overlay_x, config.overlay_y, config) {
-                eprintln!("Overlay error: {}", e);
-                std::process::exit(1);
-            }
         }
 
         "stack" => {
@@ -352,9 +200,8 @@ fn main() -> Result<()> {
             Config::save_default()?;
         }
 
-        // Windows double-click: no command arg → go straight to the GUI
-        // start path rather than printing help to a hidden console.
-        #[cfg(windows)]
+        // Double-click: no command arg → go straight to the GUI start
+        // path rather than printing help to a hidden console.
         "" => {
             start_command(wm, config)?;
         }
@@ -382,9 +229,6 @@ fn main() -> Result<()> {
                 println!("Reach out to isomerc on Discord or open a Github issue");
                 println!();
                 println!("Usage:");
-                #[cfg(unix)]
-                println!("  nicotine start         - Start everything (daemon + overlay)");
-                #[cfg(windows)]
                 println!("  nicotine start         - Start everything (daemon + previews)");
                 println!("  nicotine stop          - Stop all Nicotine processes");
                 println!("  nicotine stack         - Stack all EVE windows");
@@ -396,8 +240,6 @@ fn main() -> Result<()> {
                 println!();
                 println!("Advanced:");
                 println!("  nicotine daemon        - Start daemon only");
-                #[cfg(unix)]
-                println!("  nicotine overlay       - Start overlay only");
                 println!();
                 println!("Quick start:");
                 println!("  nicotine start         # Starts in background automatically");

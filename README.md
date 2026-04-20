@@ -4,59 +4,31 @@
 
 # Nicotine 🚬
 
-High-performance EVE Online multiboxing tool for Linux (X11 & Wayland), inspired by EVE-O Preview.
-
-[Illuminated is recruiting!](https://illuminatedcorp.com)
+High-performance EVE Online multiboxing tool for Windows, inspired by EVE-O Preview.
 
 ## Features
 
-- **Instant client cycling** with mouse buttons (forward/backward) or targeted switching (jump to client N)
-- **Always-on-top overlay** showing all clients and their status
-- **Daemon architecture** for near-zero-latency window switching
+- **Instant client cycling** with mouse side buttons or keyboard hotkeys (F10/F11 by default)
+- **DWM preview windows** - one live thumbnail per EVE client, click to activate
+- **List view** - compact always-on-top panel listing characters with active indicator
+- **Per-character hotkeys** - jump straight to a specific client
 - **Auto-stack windows** to perfectly center multiple EVE clients
-- **Draggable overlay** with middle-mouse button (X11 only)
 - **Auto-detects display resolution** - works on any monitor setup
-- **Multi-compositor support** - Works on X11, KDE Plasma (Wayland), Sway, and Hyprland
 - **Minimize inactive clients** - Optional feature to reduce resource usage by minimizing unfocused clients
-
-## Roadmap
-- Comprehensive documentation
-- More configuration options
-- Optional preview windows
-- Overlay redesign
+- **Hot-reload config** - slider changes in the config panel take effect live
 
 ## Quick Install
 
-### One-Line Installer (Recommended)
-
-```bash
-curl -sSL https://raw.githubusercontent.com/isomerc/nicotine/master/install-github.sh | bash
-```
-
-Then restart your terminal and run:
-```bash
-nicotine start    # Automatically runs in background
-```
-
-### From Source
-
-```bash
-git clone https://github.com/isomerc/nicotine
-cd nicotine
-./install-local.sh
-```
-
-Then restart your terminal and run:
-```bash
-nicotine start    # Automatically runs in background
-```
+Grab the latest `Nicotine.exe` from the [GitHub Releases page](https://github.com/isomerc/nicotine/releases) and double-click to launch. The config panel opens on first run and a default `config.toml` is generated at `%APPDATA%\nicotine\config.toml`.
 
 ## Usage
 
+Double-clicking `Nicotine.exe` is equivalent to `nicotine start` — it spawns the daemon and opens the config panel.
+
 ### Basic Commands
 
-```bash
-nicotine start          # Start everything (daemon + overlay)
+```
+nicotine start          # Start everything (daemon + previews)
 nicotine stop           # Stop all Nicotine processes
 nicotine stack          # Stack all EVE windows
 nicotine forward        # Cycle to next client
@@ -67,204 +39,70 @@ nicotine 2              # Jump to client 2
 
 ### Targeted Cycling
 
-By default, `nicotine 1`, `nicotine 2`, etc. use window detection order. To define your own order, create `~/.config/nicotine/characters.txt`:
+By default, `nicotine 1`, `nicotine 2`, etc. use window detection order. To define your own order, list character names in `config.toml` under `characters`:
 
-```
-Main Character
-Alt One
-Alt Two
-```
-
-Each line is a character name (without "EVE - " prefix). Line 1 = target 1, line 2 = target 2, etc. Bind these commands to hotkeys in your desktop environment for quick access.
-
-### Mouse Bindings
-
-**Native Support (Works on X11 & Wayland):**
-
-Nicotine has built-in mouse button detection that works universally across all display servers and compositors
-
-**Quick Setup:**
-1. Add your user to the `input` group:
-   ```bash
-   sudo usermod -a -G input $USER
-   ```
-2. **Log out and log back in** (required for group membership to take effect)
-3. Start Nicotine - mouse buttons work automatically!
-
-**Configuration:**
-Edit `~/.config/nicotine/config.toml` to customize:
 ```toml
-enable_mouse_buttons = true
-forward_button = 276   # Button 9 (forward/side button)
-backward_button = 275  # Button 8 (backward button)
-mouse_device_name = "" # Optional takes priority over mouse_device_path, use evtest to find name of the device
-mouse_device_path = "/dev/input/event3" # Optional and not created on first run, find the correct device with evtest
-```
-If using mouse_device_name the string must be na exact match, you can list your devices with evtest.
-
-```
-$ sudo evtest
-...
-/dev/input/event16:     Logitech PRO X
-...
-```
-In `~/.config/nicotine/config.toml` set
-
-```
-mouse_device_name = "Logitech PRO X"
+characters = [
+  "Main Character",
+  "Alt One",
+  "Alt Two",
+]
 ```
 
-Device is configuration priority order is:
-1. Name
-2. Path
-3. Autodetect
+Line 1 = target 1, line 2 = target 2, etc.
 
-**Common button codes:**
-- `275` = BTN_EXTRA (button 8, backward)
-- `276` = BTN_SIDE (button 9, forward)
-- `277` = BTN_FORWARD
-- `278` = BTN_BACK
+### Hotkeys
 
-**Find your button codes:**
-```bash
-sudo evtest  # Select your mouse, then click buttons to see their codes
-```
+Edit keys via the config panel or directly in `config.toml`:
 
-**Troubleshooting:**
-- Verify group membership: `groups | grep input`
-- Check permissions: `ls -l /dev/input/event*`
-- Disable if needed: `enable_mouse_buttons = false` in config
-
-### Keyboard Bindings
-
-**Quick Setup:**
-1. Add your user to the `input` group:
-   ```bash
-   sudo usermod -a -G input $USER
-   ```
-2. **Log out and log back in** (required for group membership to take effect)
-
-**Configuration:**
-Edit `~/.config/nicotine/config.toml` to customize:
 ```toml
 enable_keyboard_buttons = true
-forward_key = 15  # TAB Key
-backward_key = 15  # TAB Key - modifier_key applied if set in config
-keyboard_device_path = None # Device path /dev/input/eventX (OPTIONAL but you may need to set this if keybinds don't work)
-modifier_key = None # You will have to add this if you want a modifier key for backward cycling
+forward_key  = 0x7A  # VK_F11
+backward_key = 0x79  # VK_F10
+modifier_key = 0     # Optional extra key that must be held for backward
 ```
 
-**Common button codes:**
-- `15` = KEY_TAB (TAB Key)
-- `42` = LEFT_SHIFT
-
-**Find your button codes:**
-```bash
-sudo evtest  # Select your keyboard, then click buttons to see their codes
-```
-
-**Troubleshooting:**
-- Make sure you've enabled keyboard buttons: `enable_keyboard_buttons = true` in config
-- Check for other device events, sometimes keyboards will have multiple events but only one is handling inputs
-```bash
-cat /proc/bus/input/devices | grep -B 5 "kbd" | grep -E "Name|Handlers"
-sudo evtest /dev/input/eventX # Replace X with the correct event number i.e event11
-```
-
-### Overlay Controls
-
-- **Restack Windows** - Re-center all EVE clients
-- **Daemon status** - Green = running, Red = stopped
-- **Client list** - Shows all EVE clients with active indicator (>)
-- **Middle-click drag** - Move the overlay (X11 only)
+Mouse side buttons are off by default (they clash with browser back/forward); toggle with `enable_mouse_buttons = true`.
 
 ## Configuration
 
-Config file: `~/.config/nicotine/config.toml`
+Config file: `%APPDATA%\nicotine\config.toml`
 
 Auto-generated on first run. Key settings:
 
 ```toml
 display_width = 1920
 display_height = 1080
-panel_height = 0           # Set this if you have a taskbar/panel
-eve_width = 1037           # ~54% of display width
+panel_height = 0            # Set this if you have a taskbar/panel
+eve_width = 1037            # ~54% of display width
 eve_height = 1080
-overlay_x = 10.0
-overlay_y = 10.0
-show_overlay = true        # Set to false to run daemon-only mode (no GUI)
-enable_mouse_buttons = true
-forward_button = 276       # Button 9
-backward_button = 275      # Button 8
-minimize_inactive = false  # Minimize clients when cycling away (saves resources)
+enable_mouse_buttons = false
+forward_button = 2          # XBUTTON2 (forward side button)
+backward_button = 1         # XBUTTON1 (backward side button)
+enable_keyboard_buttons = true
+forward_key = 0x7A          # VK_F11
+backward_key = 0x79         # VK_F10
+minimize_inactive = false   # Minimize clients when cycling away
+preview_width = 320
+preview_height = 180
+show_previews = true        # Set false for headless daemon (hotkeys only)
+positions_locked = false
 ```
 
 ## Architecture
 
-- **Daemon mode**: Maintains window manager connection and state in memory for instant cycling
-- **Unix socket IPC**: ~2ms command latency (vs ~50-100ms process spawning)
-- **Non-blocking activation**: Fire-and-forget window switching
-- **Native mouse support**: Direct evdev access for universal mouse button detection
-
-## Requirements
-
-### Display Server Support
-
-Nicotine supports both **X11** and **Wayland** (compositor-dependent):
-
-- **X11** - Full support (all features)
-- **Wayland - KDE Plasma** - Full support via wmctrl (XWayland)
-- **Wayland - Sway** - Full support via swaymsg
-- **Wayland - Hyprland** - Full support via hyprctl
-- **Wayland - GNOME** - Not supported (restrictive APIs)
-
-### Dependencies
-
-**Required:**
-- **wmctrl** - Window management on X11 and KDE Plasma Wayland
-
-**Wayland-specific (compositor tools):**
-- **KDE Plasma:** wmctrl (uses XWayland compatibility)
-- **Sway:** swaymsg (included with sway)
-- **Hyprland:** hyprctl (included with hyprland)
-
-**Install:**
-```bash
-# Arch
-sudo pacman -S wmctrl
-
-# Ubuntu/Debian
-sudo apt install wmctrl
-
-# Fedora
-sudo dnf install wmctrl
-```
-
-For **mouse button support**, add yourself to the `input` group (see Mouse Bindings section).
-
-## Wayland Support & Known Limitations
-
-**What works:**
-- Mouse buttons (native evdev support, no external tools needed)
-- Window detection and cycling (all supported compositors)
-- Window stacking (KDE/Sway/Hyprland)
-- Auto-detection of display server and compositor
-
-**Limitations:**
-- Overlay dragging disabled on Wayland (security model prevents arbitrary window positioning)
-  - Workaround: Use compositor window management (e.g., Super+drag)
-- GNOME not supported (restrictive window management APIs)
+- **Daemon mode**: Maintains window state in memory for instant cycling
+- **Named-pipe IPC**: ~2ms command latency (vs ~50-100ms process spawning)
+- **Native input hooks**: Low-level keyboard + mouse hooks for hotkeys
+- **DWM thumbnails**: Live preview windows via the Desktop Window Manager API
 
 ## Building from Source
 
-```bash
-# Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Build
+```
+# Install Rust (https://rustup.rs)
 cargo build --release
 
-# Binary at: target/release/nicotine
+# Binary at: target\release\Nicotine.exe
 ```
 
 ## License

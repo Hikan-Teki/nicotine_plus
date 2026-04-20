@@ -206,19 +206,16 @@ impl eframe::App for ConfigPanel {
         // global hotkeys — otherwise RegisterHotKey swallows F10/F11
         // before egui sees them, and binding appears broken.
         if self.last_capturing != self.capturing {
-            #[cfg(windows)]
-            {
-                if self.last_capturing.is_none() && self.capturing.is_some() {
-                    crate::windows_input::pause_hotkeys();
-                } else if self.last_capturing.is_some() && self.capturing.is_none() {
-                    // Flush config.toml synchronously before resuming so
-                    // the listener's Config::load() sees the new binding.
-                    if self.last_change.is_some() {
-                        let _ = self.config.save();
-                        self.last_change = None;
-                    }
-                    crate::windows_input::resume_hotkeys();
+            if self.last_capturing.is_none() && self.capturing.is_some() {
+                crate::windows_input::pause_hotkeys();
+            } else if self.last_capturing.is_some() && self.capturing.is_none() {
+                // Flush config.toml synchronously before resuming so
+                // the listener's Config::load() sees the new binding.
+                if self.last_change.is_some() {
+                    let _ = self.config.save();
+                    self.last_change = None;
                 }
+                crate::windows_input::resume_hotkeys();
             }
             self.last_capturing = self.capturing.clone();
         }
@@ -273,15 +270,6 @@ impl eframe::App for ConfigPanel {
                     ui.hyperlink_to(
                         egui::RichText::new("GITHUB").strong().color(NICOTINE_RED),
                         "https://github.com/isomerc",
-                    );
-                    ui.add_space(14.0);
-                    ui.colored_label(NICOTINE_GOLD, "•");
-                    ui.add_space(14.0);
-                    ui.hyperlink_to(
-                        egui::RichText::new("ILLUMINATED IS RECRUITING")
-                            .strong()
-                            .color(NICOTINE_RED),
-                        "https://www.illuminatedcorp.com",
                     );
 
                     // Right-aligned update badge. `right_to_left`

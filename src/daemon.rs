@@ -1,11 +1,6 @@
 use crate::config::{Config, LiveSettings};
 use crate::cycle_state::CycleState;
 use crate::ipc;
-#[cfg(unix)]
-use crate::keyboard_listener::KeyboardListener;
-#[cfg(unix)]
-use crate::mouse_listener::MouseListener;
-use crate::telemetry;
 use crate::window_manager::WindowManager;
 use anyhow::Result;
 use interprocess::local_socket::traits::ListenerExt as _;
@@ -47,22 +42,11 @@ pub struct Daemon {
     state: Arc<Mutex<CycleState>>,
     config: Config,
     character_order: Option<Vec<String>>,
-    /// Read by the Windows preview manager via `spawn_input_listeners`.
-    /// On Linux nothing reads it — kept for ABI symmetry with the Windows
-    /// daemon constructor.
-    #[cfg_attr(unix, allow(dead_code))]
     live: Arc<Mutex<LiveSettings>>,
 }
 
 impl Daemon {
     pub fn new(wm: Arc<dyn WindowManager>, config: Config, live: Arc<Mutex<LiveSettings>>) -> Self {
-        // Anonymous launch ping. Fires once per daemon start (which is
-        // also once per `nicotine start` / double-click on Windows), not
-        // per cycle command — those go over IPC and don't construct a
-        // new Daemon. Detached + best-effort, so a network failure or
-        // missing token never blocks startup.
-        telemetry::send_launch_ping();
-
         let state = Arc::new(Mutex::new(CycleState::new()));
 
         // Initialize windows
@@ -119,7 +103,6 @@ impl Daemon {
         };
         // Signature of all hotkey-related fields, used to detect changes
         // and trigger a daemon-side rebind without restart.
-        #[cfg(windows)]
         type HotkeySig = (
             bool,
             u16,
@@ -127,7 +110,6 @@ impl Daemon {
             Option<u16>,
             std::collections::HashMap<String, crate::config::CharacterHotkey>,
         );
-        #[cfg(windows)]
         fn hotkey_sig(c: &Config) -> HotkeySig {
             (
                 c.enable_keyboard_buttons,
@@ -137,7 +119,6 @@ impl Daemon {
                 c.character_hotkeys.clone(),
             )
         }
-        #[cfg(windows)]
         let mut last_hotkey_sig = hotkey_sig(&self.config);
 
         std::thread::spawn(move || loop {
@@ -168,19 +149,14 @@ impl Daemon {
 
                 // Hotkey-config change → rebind so the new keys take
                 // effect without a daemon restart.
-                #[cfg(windows)]
-                {
-                    let new_sig = hotkey_sig(&fresh_config);
-                    if new_sig != last_hotkey_sig {
-                        crate::windows_input::resume_hotkeys();
-                        last_hotkey_sig = new_sig;
-                    }
-                    // Mouse-cycle toggle hot-reload. Atomic store is
-                    // cheap; no need to gate on a change check.
-                    crate::windows_input::set_mouse_cycle_enabled(
-                        fresh_config.enable_mouse_buttons,
-                    );
+                let new_sig = hotkey_sig(&fresh_config);
+                if new_sig != last_hotkey_sig {
+                    crate::windows_input::resume_hotkeys();
+                    last_hotkey_sig = new_sig;
                 }
+                // Mouse-cycle toggle hot-reload. Atomic store is cheap;
+                // no need to gate on a change check.
+                crate::windows_input::set_mouse_cycle_enabled(fresh_config.enable_mouse_buttons);
             }
         });
 
@@ -200,46 +176,6 @@ impl Daemon {
         Ok(())
     }
 
-    #[cfg(unix)]
-    fn spawn_input_listeners(&self) {
-        if self.config.enable_mouse_buttons {
-            let mouse_listener = MouseListener::new(self.config.clone());
-            let wm_clone = Arc::clone(&self.wm);
-            let state_clone = Arc::clone(&self.state);
-
-            match mouse_listener.spawn(wm_clone, state_clone) {
-                Ok(_) => println!("Mouse button listener started"),
-                Err(e) => {
-                    eprintln!("Warning: Could not start mouse listener: {}", e);
-                    eprintln!(
-                        "Mouse buttons will not work. You can disable this warning by setting"
-                    );
-                    eprintln!("'enable_mouse_buttons = false' in ~/.config/nicotine/config.toml");
-                }
-            }
-        }
-
-        if self.config.enable_keyboard_buttons {
-            let keyboard_listener = KeyboardListener::new(self.config.clone());
-            let wm_clone = Arc::clone(&self.wm);
-            let state_clone = Arc::clone(&self.state);
-
-            match keyboard_listener.spawn(wm_clone, state_clone) {
-                Ok(_) => println!("Keyboard key listener started"),
-                Err(e) => {
-                    eprintln!("Warning: Could not start keyboard listener: {}", e);
-                    eprintln!(
-                        "Keyboard keys will not work.  You can disable this warning by setting"
-                    );
-                    eprintln!(
-                        "'enable_keyboard_buttons = false' in ~/.config/nicotine/config.toml"
-                    );
-                }
-            }
-        }
-    }
-
-    #[cfg(windows)]
     fn spawn_input_listeners(&self) {
         // Hotkey + low-level mouse hook listener (always spawned).
         let wm_clone = Arc::clone(&self.wm);

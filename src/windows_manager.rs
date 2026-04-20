@@ -8,7 +8,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, EnumWindows, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
     GetWindowThreadProcessId, IsIconic, IsWindowVisible, SendMessageW, SetForegroundWindow,
-    SetWindowPos, ShowWindow, HWND_TOP, SC_MINIMIZE, SC_RESTORE, SWP_NOSIZE, SWP_NOZORDER,
+    SetWindowPos, ShowWindow, HWND_TOP, SC_MINIMIZE, SC_RESTORE, SWP_NOZORDER,
     SW_MINIMIZE, SW_RESTORE, WM_SYSCOMMAND,
 };
 
@@ -166,55 +166,6 @@ impl WindowManager for WindowsManager {
     fn get_active_window(&self) -> Result<u32> {
         let hwnd = unsafe { GetForegroundWindow() };
         Ok(hwnd_to_id(hwnd))
-    }
-
-    fn find_window_by_title(&self, title: &str) -> Result<Option<u32>> {
-        struct Search {
-            needle: String,
-            found: Option<u32>,
-        }
-        let mut search = Search {
-            needle: title.to_string(),
-            found: None,
-        };
-
-        unsafe extern "system" fn cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
-            let s = &mut *(lparam.0 as *mut Search);
-            if s.found.is_some() {
-                return BOOL(0);
-            }
-            if !IsWindowVisible(hwnd).as_bool() {
-                return TRUE;
-            }
-            if read_window_title(hwnd) == s.needle {
-                s.found = Some(hwnd_to_id(hwnd));
-                return BOOL(0);
-            }
-            TRUE
-        }
-
-        unsafe {
-            // Returning false from the callback to short-circuit surfaces as
-            // an Err from EnumWindows; ignore it.
-            let _ = EnumWindows(Some(cb), LPARAM(&mut search as *mut _ as isize));
-        }
-        Ok(search.found)
-    }
-
-    fn move_window(&self, window_id: u32, x: i32, y: i32) -> Result<()> {
-        unsafe {
-            SetWindowPos(
-                id_to_hwnd(window_id),
-                Some(HWND_TOP),
-                x,
-                y,
-                0,
-                0,
-                SWP_NOZORDER | SWP_NOSIZE,
-            )
-            .ok();
-        }
-        Ok(())
     }
 
     fn minimize_window(&self, window_id: u32) -> Result<()> {
