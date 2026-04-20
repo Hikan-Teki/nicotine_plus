@@ -1,6 +1,7 @@
 MIT License
 
-Copyright (c) 2025 Isomerc
+Copyright (c) 2025 Isomerc (original Nicotine project — https://github.com/isomerc/nicotine)
+Copyright (c) 2026 Anıl Görkem Fırat (Inari fork for Inari Syndicate / Kitsune Zaibatsu)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
