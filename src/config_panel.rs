@@ -1,7 +1,8 @@
-use crate::config::{Config, DisplayMode, LiveSettings};
+use crate::config::{CharacterEntry, CharacterHotkey, Config, DisplayMode, LiveSettings};
 use eframe::egui;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 
 /// After any config edit we wait this long with no further edits before
 /// flushing to disk. 300ms is the sweet spot — saves feel instant when
@@ -22,13 +23,42 @@ enum CaptureTarget {
     Character(String),
 }
 
-/// Options for the per-character / main modifier dropdown.
-const MODIFIER_CHOICES: &[(Option<u16>, &str)] = &[
-    (None, "None"),
-    (Some(0x10), "Shift"),
-    (Some(0x11), "Ctrl"),
-    (Some(0x12), "Alt"),
-];
+/// Result of a completed capture poll. Per-character bindings consume
+/// `Main` (a non-modifier key plus whichever modifiers were held at the
+/// moment of press); the global `modifier_key` slot consumes `Modifier`.
+#[derive(Debug, Clone, Copy)]
+enum CapturedKey {
+    Main {
+        vk: u16,
+        ctrl: bool,
+        shift: bool,
+        alt: bool,
+    },
+    Modifier(u16),
+}
+
+/// Per-frame held state of every VK, used to detect rising edges while
+/// capturing. Initialized on capture start so modifiers already held
+/// (e.g. user still holding Ctrl after pressing the bind button) don't
+/// immediately fire as a "new press."
+struct CaptureBuffer {
+    prev: [bool; 256],
+    primed: bool,
+}
+
+impl CaptureBuffer {
+    fn new() -> Self {
+        Self {
+            prev: [false; 256],
+            primed: false,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.prev = [false; 256];
+        self.primed = false;
+    }
+}
 
 /// Brand palette matching the existing Linux overlay.
 const NICOTINE_RED: egui::Color32 = egui::Color32::from_rgb(196, 30, 58);
@@ -54,6 +84,8 @@ pub struct ConfigPanel {
     /// the user enters capture mode (otherwise RegisterHotKey eats the
     /// key before egui can see it) and resume afterwards.
     last_capturing: Option<CaptureTarget>,
+    /// Per-VK previous-frame state for the Win32 capture path.
+    capture_buf: CaptureBuffer,
     /// Timestamp of the last config edit. When set and `AUTOSAVE_DEBOUNCE`
     /// has elapsed with no further edits, the panel flushes the config
     /// to disk. Kept as an Option so we can skip saving when nothing
@@ -109,6 +141,7 @@ impl ConfigPanel {
             live,
             capturing: None,
             last_capturing: None,
+            capture_buf: CaptureBuffer::new(),
             last_change: None,
             last_applied_height: 0.0,
         }
@@ -169,34 +202,65 @@ fn build_visuals() -> egui::Visuals {
 impl eframe::App for ConfigPanel {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // ---- Capture mode: listen for the next keypress ----
-        // Runs before any widget draw so the event stream we inspect
-        // reflects what the user just did.
+        // We poll Win32 GetAsyncKeyState rather than egui's key stream
+        // because egui doesn't distinguish top-row digits from numpad
+        // digits (both fire as `Key::Num1`) and can't expose all the VK
+        // codes we need for bindings like Ctrl+Num 1.
         if let Some(target) = self.capturing.clone() {
-            if let Some(vk) = captured_binding(ctx) {
-                match &target {
-                    CaptureTarget::ForwardKey => self.config.forward_key = vk,
-                    CaptureTarget::BackwardKey => self.config.backward_key = vk,
-                    CaptureTarget::ModifierKey => self.config.modifier_key = Some(vk),
+            match poll_capture(&mut self.capture_buf) {
+                Some(CapturedKey::Main {
+                    vk,
+                    ctrl,
+                    shift,
+                    alt,
+                }) => match &target {
+                    CaptureTarget::ForwardKey => {
+                        self.config.forward_key = vk;
+                        self.capturing = None;
+                        self.touch();
+                    }
+                    CaptureTarget::BackwardKey => {
+                        self.config.backward_key = vk;
+                        self.capturing = None;
+                        self.touch();
+                    }
                     CaptureTarget::Character(name) => {
-                        // Preserve the existing modifier if already set,
-                        // otherwise default to no modifier.
-                        let modifier = self
-                            .config
-                            .character_hotkeys
-                            .get(name)
-                            .and_then(|h| h.modifier);
                         self.config.character_hotkeys.insert(
                             name.clone(),
-                            crate::config::CharacterHotkey { vk, modifier },
+                            CharacterHotkey {
+                                vk,
+                                ctrl,
+                                shift,
+                                alt,
+                            },
                         );
+                        self.capturing = None;
+                        self.touch();
                     }
+                    // User was aiming to bind a modifier but pressed a
+                    // main key instead — ignore; keep capturing so the
+                    // next Shift/Ctrl/Alt press lands.
+                    CaptureTarget::ModifierKey => {}
+                },
+                Some(CapturedKey::Modifier(vk)) => {
+                    if let CaptureTarget::ModifierKey = &target {
+                        self.config.modifier_key = Some(vk);
+                        self.capturing = None;
+                        self.touch();
+                    }
+                    // For ForwardKey/BackwardKey/Character targets,
+                    // hold the modifier silently — it'll combine with
+                    // the next main-key press (above).
                 }
-                self.capturing = None;
-                self.touch();
-            } else if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-                // Escape cancels capture without binding.
+                None => {}
+            }
+
+            // Escape cancels capture without binding. Checked via egui
+            // (the Win32 path skips 0x1B intentionally).
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 self.capturing = None;
             }
+
             // Keep requesting frames so a key press lands even when the
             // user isn't hovering over the panel.
             ctx.request_repaint();
@@ -207,6 +271,10 @@ impl eframe::App for ConfigPanel {
         // before egui sees them, and binding appears broken.
         if self.last_capturing != self.capturing {
             if self.last_capturing.is_none() && self.capturing.is_some() {
+                // Reset per-VK edge-detect state so modifiers already
+                // held when the user entered capture mode don't register
+                // as a fresh press on the first poll.
+                self.capture_buf.reset();
                 crate::windows_input::pause_hotkeys();
             } else if self.last_capturing.is_some() && self.capturing.is_none() {
                 // Flush config.toml synchronously before resuming so
@@ -432,8 +500,10 @@ impl ConfigPanel {
         Self::draw_section_header(ui, "Cycle Order");
         ui.label(
             egui::RichText::new(
-                "Characters cycle in the order shown. Names must match EVE's window title \
-                 exactly (the part after \"EVE - \").",
+                "Characters cycle in the order shown. Uncheck \"in cycle\" to keep a \
+                 character visible with its hotkey but skip it during forward/backward \
+                 cycling (e.g. a scout). Names must match EVE's window title exactly \
+                 (the part after \"EVE - \").",
             )
             .size(11.0)
             .color(NICOTINE_BLACK),
@@ -452,7 +522,7 @@ impl ConfigPanel {
             ui.horizontal(|ui| {
                 ui.label(format!("{}.", idx + 1));
                 if ui
-                    .text_edit_singleline(&mut self.config.characters[idx])
+                    .text_edit_singleline(&mut self.config.characters[idx].name)
                     .changed()
                 {
                     dirty = true;
@@ -468,65 +538,63 @@ impl ConfigPanel {
                 }
             });
 
-            // Row 2 — per-character jump hotkey.
-            let name = self.config.characters[idx].clone();
+            // Row 2 — per-character jump hotkey + cycle flag.
+            let name = self.config.characters[idx].name.clone();
             ui.horizontal(|ui| {
                 ui.add_space(22.0);
-                ui.label("Hotkey:");
 
-                // Modifier dropdown.
-                let current_mod = self
-                    .config
-                    .character_hotkeys
-                    .get(&name)
-                    .and_then(|h| h.modifier);
-                let selected_label = MODIFIER_CHOICES
-                    .iter()
-                    .find(|(m, _)| *m == current_mod)
-                    .map(|(_, l)| *l)
-                    .unwrap_or("None");
-                let mut new_mod = current_mod;
-                egui::ComboBox::from_id_salt(format!("char_mod_{}", idx))
-                    .selected_text(selected_label)
-                    .width(70.0)
-                    .show_ui(ui, |ui| {
-                        for (code, label) in MODIFIER_CHOICES {
-                            if ui.selectable_label(new_mod == *code, *label).clicked() {
-                                new_mod = *code;
-                            }
-                        }
-                    });
-                if new_mod != current_mod {
-                    // Always persist the modifier choice. If no key has
-                    // been bound yet, we create a placeholder entry
-                    // with vk=0; the daemon's register_hotkeys skips
-                    // vk=0 entries, and the next captured keypress
-                    // fills in the vk while preserving this modifier.
-                    let entry = self.config.character_hotkeys.entry(name.clone()).or_insert(
-                        crate::config::CharacterHotkey {
-                            vk: 0,
-                            modifier: None,
-                        },
-                    );
-                    entry.modifier = new_mod;
+                // In-cycle toggle — scout characters get their hotkey
+                // and their list row, but are skipped by forward/back.
+                let prev_in_cycle = self.config.characters[idx].in_cycle;
+                ui.checkbox(&mut self.config.characters[idx].in_cycle, "in cycle");
+                if self.config.characters[idx].in_cycle != prev_in_cycle {
                     dirty = true;
                 }
 
-                // Bind button — shows current VK or "none." vk == 0
-                // means "only the modifier is set so far," so we also
+                ui.add_space(8.0);
+                ui.label("Hotkey:");
+
+                // Modifier checkboxes (Ctrl / Shift / Alt). Creating a
+                // placeholder entry with vk=0 is how we preserve a
+                // modifier-only selection until the user captures a
+                // main key — register_hotkeys skips vk=0 entries.
+                let current = self
+                    .config
+                    .character_hotkeys
+                    .get(&name)
+                    .cloned()
+                    .unwrap_or(CharacterHotkey {
+                        vk: 0,
+                        ctrl: false,
+                        shift: false,
+                        alt: false,
+                    });
+                let mut next = current.clone();
+                ui.checkbox(&mut next.ctrl, "Ctrl");
+                ui.checkbox(&mut next.shift, "Shift");
+                ui.checkbox(&mut next.alt, "Alt");
+                if next != current {
+                    self.config
+                        .character_hotkeys
+                        .insert(name.clone(), next.clone());
+                    dirty = true;
+                }
+
+                // Bind button — shows the full combo label. vk == 0
+                // means "only the modifiers are set so far," so we
                 // display that as "none" until a real key is captured.
                 let binding_label = self
                     .config
                     .character_hotkeys
                     .get(&name)
                     .filter(|h| h.vk != 0)
-                    .map(|h| vk_to_label(h.vk))
+                    .map(hotkey_label)
                     .unwrap_or_else(|| "none".into());
                 self.draw_bind_button_sized(
                     ui,
                     &CaptureTarget::Character(name.clone()),
                     binding_label,
-                    egui::vec2(100.0, 20.0),
+                    egui::vec2(140.0, 20.0),
                 );
 
                 // Clear the binding entirely.
@@ -550,8 +618,8 @@ impl ConfigPanel {
         }
         if let Some(idx) = remove {
             // Drop the per-character hotkey for the removed name too.
-            let removed_name = self.config.characters.remove(idx);
-            self.config.character_hotkeys.remove(&removed_name);
+            let removed = self.config.characters.remove(idx);
+            self.config.character_hotkeys.remove(&removed.name);
             self.touch();
         }
 
@@ -563,9 +631,9 @@ impl ConfigPanel {
             let enter_pressed =
                 response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if (add_clicked || enter_pressed) && !self.new_character_buffer.trim().is_empty() {
-                self.config
-                    .characters
-                    .push(self.new_character_buffer.trim().to_string());
+                self.config.characters.push(CharacterEntry::new(
+                    self.new_character_buffer.trim().to_string(),
+                ));
                 self.new_character_buffer.clear();
                 self.touch();
             }
@@ -724,213 +792,115 @@ impl ConfigPanel {
     }
 }
 
-/// All egui keys we're willing to bind, in the order we poll them.
-/// Using `key_pressed` polling here (instead of matching Event::Key in
-/// the event stream) is more reliable when a widget — like the bind
-/// button the user just clicked — has focus: egui may consume some
-/// keys before they surface as generic events, but `key_pressed` sees
-/// the edge regardless.
-const SUPPORTED_KEYS: &[egui::Key] = &[
-    egui::Key::F1,
-    egui::Key::F2,
-    egui::Key::F3,
-    egui::Key::F4,
-    egui::Key::F5,
-    egui::Key::F6,
-    egui::Key::F7,
-    egui::Key::F8,
-    egui::Key::F9,
-    egui::Key::F10,
-    egui::Key::F11,
-    egui::Key::F12,
-    egui::Key::F13,
-    egui::Key::F14,
-    egui::Key::F15,
-    egui::Key::Tab,
-    egui::Key::Space,
-    egui::Key::Enter,
-    egui::Key::Backspace,
-    egui::Key::Insert,
-    egui::Key::Delete,
-    egui::Key::Home,
-    egui::Key::End,
-    egui::Key::PageUp,
-    egui::Key::PageDown,
-    egui::Key::ArrowUp,
-    egui::Key::ArrowDown,
-    egui::Key::ArrowLeft,
-    egui::Key::ArrowRight,
-    egui::Key::A,
-    egui::Key::B,
-    egui::Key::C,
-    egui::Key::D,
-    egui::Key::E,
-    egui::Key::F,
-    egui::Key::G,
-    egui::Key::H,
-    egui::Key::I,
-    egui::Key::J,
-    egui::Key::K,
-    egui::Key::L,
-    egui::Key::M,
-    egui::Key::N,
-    egui::Key::O,
-    egui::Key::P,
-    egui::Key::Q,
-    egui::Key::R,
-    egui::Key::S,
-    egui::Key::T,
-    egui::Key::U,
-    egui::Key::V,
-    egui::Key::W,
-    egui::Key::X,
-    egui::Key::Y,
-    egui::Key::Z,
-    egui::Key::Num0,
-    egui::Key::Num1,
-    egui::Key::Num2,
-    egui::Key::Num3,
-    egui::Key::Num4,
-    egui::Key::Num5,
-    egui::Key::Num6,
-    egui::Key::Num7,
-    egui::Key::Num8,
-    egui::Key::Num9,
-    egui::Key::Backtick,
-    egui::Key::Minus,
-    egui::Key::Equals,
-    egui::Key::OpenBracket,
-    egui::Key::CloseBracket,
-    egui::Key::Backslash,
-    egui::Key::Semicolon,
-    egui::Key::Quote,
-    egui::Key::Comma,
-    egui::Key::Period,
-    egui::Key::Slash,
-];
+/// Poll Win32 `GetAsyncKeyState` and return the first rising-edge press
+/// observed this frame. The CaptureBuffer tracks last-frame state per
+/// VK so modifiers already held when capture began (prev=true) never
+/// fire as "new."
+fn poll_capture(buf: &mut CaptureBuffer) -> Option<CapturedKey> {
+    let mut cur = [false; 256];
+    for vk in 0u16..=255 {
+        let s = unsafe { GetAsyncKeyState(vk as i32) } as u16;
+        cur[vk as usize] = (s & 0x8000) != 0;
+    }
 
-/// Poll egui for the first bindable key press this frame. Returns the
-/// Win32 VK code to bind, or None if no eligible press happened.
-fn captured_binding(ctx: &egui::Context) -> Option<u16> {
-    ctx.input(|i| {
-        for key in SUPPORTED_KEYS {
-            if *key == egui::Key::Escape {
-                continue;
-            }
-            if i.key_pressed(*key) {
-                return egui_key_to_vk(*key);
-            }
+    // First poll after capture starts: snapshot whatever's already held
+    // as the baseline and return nothing. Only keys pressed AFTER this
+    // moment will register as edges on subsequent polls.
+    if !buf.primed {
+        buf.prev = cur;
+        buf.primed = true;
+        return None;
+    }
+
+    let mut result: Option<CapturedKey> = None;
+
+    for vk in 0u16..=255 {
+        let was_down = buf.prev[vk as usize];
+        let is_down = cur[vk as usize];
+        if was_down || !is_down {
+            continue;
         }
-        None
-    })
+
+        if is_modifier_vk(vk) {
+            // Canonicalize left/right variants to the plain VK the
+            // config stores (0x10 / 0x11 / 0x12).
+            let canonical = canonical_modifier(vk);
+            if result.is_none() {
+                result = Some(CapturedKey::Modifier(canonical));
+            }
+            continue;
+        }
+        if !is_bindable_main_key(vk) {
+            continue;
+        }
+
+        // Main key edge — emit with a fresh read of all three modifier
+        // groups (using `cur`, not prev, so a modifier being held at
+        // the moment of press flips the flag to true).
+        let ctrl = cur[0x11] || cur[0xA2] || cur[0xA3];
+        let shift = cur[0x10] || cur[0xA0] || cur[0xA1];
+        let alt = cur[0x12] || cur[0xA4] || cur[0xA5];
+        result = Some(CapturedKey::Main {
+            vk,
+            ctrl,
+            shift,
+            alt,
+        });
+        break;
+    }
+
+    buf.prev = cur;
+    result
 }
 
-/// Map an egui Key to the Windows Virtual-Key code. Returns None for
-/// keys that don't have a standard VK_ (mostly exotic IME / media keys
-/// we don't care about binding for cycling).
-fn egui_key_to_vk(key: egui::Key) -> Option<u16> {
-    use egui::Key;
-    let vk: u32 = match key {
-        Key::F1 => 0x70,
-        Key::F2 => 0x71,
-        Key::F3 => 0x72,
-        Key::F4 => 0x73,
-        Key::F5 => 0x74,
-        Key::F6 => 0x75,
-        Key::F7 => 0x76,
-        Key::F8 => 0x77,
-        Key::F9 => 0x78,
-        Key::F10 => 0x79,
-        Key::F11 => 0x7A,
-        Key::F12 => 0x7B,
-        Key::F13 => 0x7C,
-        Key::F14 => 0x7D,
-        Key::F15 => 0x7E,
-        Key::Tab => 0x09,
-        Key::Space => 0x20,
-        Key::Enter => 0x0D,
-        Key::Backspace => 0x08,
-        Key::Insert => 0x2D,
-        Key::Delete => 0x2E,
-        Key::Home => 0x24,
-        Key::End => 0x23,
-        Key::PageUp => 0x21,
-        Key::PageDown => 0x22,
-        Key::ArrowUp => 0x26,
-        Key::ArrowDown => 0x28,
-        Key::ArrowLeft => 0x25,
-        Key::ArrowRight => 0x27,
-        Key::A => 0x41,
-        Key::B => 0x42,
-        Key::C => 0x43,
-        Key::D => 0x44,
-        Key::E => 0x45,
-        Key::F => 0x46,
-        Key::G => 0x47,
-        Key::H => 0x48,
-        Key::I => 0x49,
-        Key::J => 0x4A,
-        Key::K => 0x4B,
-        Key::L => 0x4C,
-        Key::M => 0x4D,
-        Key::N => 0x4E,
-        Key::O => 0x4F,
-        Key::P => 0x50,
-        Key::Q => 0x51,
-        Key::R => 0x52,
-        Key::S => 0x53,
-        Key::T => 0x54,
-        Key::U => 0x55,
-        Key::V => 0x56,
-        Key::W => 0x57,
-        Key::X => 0x58,
-        Key::Y => 0x59,
-        Key::Z => 0x5A,
-        Key::Num0 => 0x30,
-        Key::Num1 => 0x31,
-        Key::Num2 => 0x32,
-        Key::Num3 => 0x33,
-        Key::Num4 => 0x34,
-        Key::Num5 => 0x35,
-        Key::Num6 => 0x36,
-        Key::Num7 => 0x37,
-        Key::Num8 => 0x38,
-        Key::Num9 => 0x39,
-        Key::Backtick => 0xC0,
-        Key::Minus => 0xBD,
-        Key::Equals => 0xBB,
-        Key::OpenBracket => 0xDB,
-        Key::CloseBracket => 0xDD,
-        Key::Backslash => 0xDC,
-        Key::Semicolon => 0xBA,
-        Key::Quote => 0xDE,
-        Key::Comma => 0xBC,
-        Key::Period => 0xBE,
-        Key::Slash => 0xBF,
-        _ => return None,
-    };
-    Some(vk as u16)
+fn is_modifier_vk(vk: u16) -> bool {
+    matches!(vk, 0x10 | 0x11 | 0x12 | 0xA0..=0xA5)
+}
+
+fn canonical_modifier(vk: u16) -> u16 {
+    match vk {
+        0x10 | 0xA0 | 0xA1 => 0x10,
+        0x11 | 0xA2 | 0xA3 => 0x11,
+        0x12 | 0xA4 | 0xA5 => 0x12,
+        other => other,
+    }
+}
+
+fn is_bindable_main_key(vk: u16) -> bool {
+    // Escape is reserved for cancel. Mouse buttons (0x01–0x06) and
+    // null-ish low codes aren't useful as keyboard hotkeys.
+    if vk == 0x1B || vk < 0x08 {
+        return false;
+    }
+    // Mouse VKs — not a keyboard hotkey.
+    if matches!(vk, 0x01 | 0x02 | 0x04 | 0x05 | 0x06) {
+        return false;
+    }
+    // Caps/Num/Scroll Lock, IME keys, and other oddities that
+    // RegisterHotKey rejects or that fire spuriously during typing.
+    if matches!(
+        vk,
+        0x14 | 0x90 | 0x91 | 0x15..=0x1A | 0x1C..=0x1F | 0x5B..=0x5F | 0xA6..=0xB7 | 0xE0..=0xFE
+    ) {
+        return false;
+    }
+    true
 }
 
 /// Human label for a Win32 VK code, used on the bind button.
 fn vk_to_label(vk: u16) -> String {
     match vk {
-        0x70 => "F1".into(),
-        0x71 => "F2".into(),
-        0x72 => "F3".into(),
-        0x73 => "F4".into(),
-        0x74 => "F5".into(),
-        0x75 => "F6".into(),
-        0x76 => "F7".into(),
-        0x77 => "F8".into(),
-        0x78 => "F9".into(),
-        0x79 => "F10".into(),
-        0x7A => "F11".into(),
-        0x7B => "F12".into(),
+        0x70..=0x87 => format!("F{}", vk - 0x6F),
         0x09 => "Tab".into(),
         0x20 => "Space".into(),
         0x0D => "Enter".into(),
         0x08 => "Backspace".into(),
+        0x2D => "Insert".into(),
+        0x2E => "Delete".into(),
+        0x24 => "Home".into(),
+        0x23 => "End".into(),
+        0x21 => "PgUp".into(),
+        0x22 => "PgDown".into(),
         0x1B => "Escape".into(),
         0x10 | 0xA0 | 0xA1 => "Shift".into(),
         0x11 | 0xA2 | 0xA3 => "Ctrl".into(),
@@ -938,12 +908,45 @@ fn vk_to_label(vk: u16) -> String {
         0xC0 => "`".into(),
         0x30..=0x39 => format!("{}", (vk - 0x30) as u8 as char),
         0x41..=0x5A => format!("{}", vk as u8 as char),
+        0x60..=0x69 => format!("Num {}", vk - 0x60),
+        0x6A => "Num *".into(),
+        0x6B => "Num +".into(),
+        0x6D => "Num -".into(),
+        0x6E => "Num .".into(),
+        0x6F => "Num /".into(),
         0x26 => "Up".into(),
         0x28 => "Down".into(),
         0x25 => "Left".into(),
         0x27 => "Right".into(),
+        0xBA => ";".into(),
+        0xBB => "=".into(),
+        0xBC => ",".into(),
+        0xBD => "-".into(),
+        0xBE => ".".into(),
+        0xBF => "/".into(),
+        0xDB => "[".into(),
+        0xDC => "\\".into(),
+        0xDD => "]".into(),
+        0xDE => "'".into(),
         other => format!("VK 0x{:02X}", other),
     }
+}
+
+/// Human label for a character hotkey, combining its modifier flags
+/// with the main key (e.g. `Ctrl+Shift+Num 1`).
+fn hotkey_label(hk: &CharacterHotkey) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if hk.ctrl {
+        parts.push("Ctrl".into());
+    }
+    if hk.shift {
+        parts.push("Shift".into());
+    }
+    if hk.alt {
+        parts.push("Alt".into());
+    }
+    parts.push(vk_to_label(hk.vk));
+    parts.join("+")
 }
 
 /// Open the config panel as a top-level window. Blocks until the user

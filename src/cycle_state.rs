@@ -1,3 +1,4 @@
+use crate::config::CharacterEntry;
 use crate::paths;
 use crate::window_manager::{EveWindow, WindowManager};
 use anyhow::Result;
@@ -6,11 +7,13 @@ use std::fs;
 pub struct CycleState {
     current_index: usize,
     windows: Vec<EveWindow>,
-    /// Optional ordered list of character names from characters.txt. When
-    /// set, forward/backward cycling traverses this order, skipping any
-    /// listed names that aren't currently logged in. When None, cycles
-    /// through windows in whatever order the window manager reports them.
-    character_order: Option<Vec<String>>,
+    /// Optional ordered list of characters from `config.toml`. Each entry
+    /// carries an `in_cycle` flag — scout entries stay in the display
+    /// order (and can be jumped to via `switch N` or per-character
+    /// hotkeys) but forward/backward cycling skips over them. When
+    /// `None`, forward/backward cycle through windows in whatever order
+    /// the window manager reports them.
+    character_order: Option<Vec<CharacterEntry>>,
 }
 
 impl CycleState {
@@ -22,19 +25,34 @@ impl CycleState {
         }
     }
 
-    pub fn set_character_order(&mut self, order: Option<Vec<String>>) {
+    pub fn set_character_order(&mut self, order: Option<Vec<CharacterEntry>>) {
         self.character_order = order;
     }
 
-    /// Indices into `self.windows` in the order forward-cycling should
-    /// traverse them. If `character_order` is set, only listed characters
-    /// who are currently logged in are included, in list order. Otherwise
-    /// every window is included in detection order.
+    /// Indices into `self.windows` in forward-cycling traversal order —
+    /// honors `in_cycle`, so scout entries are skipped. If no character
+    /// order is set, falls back to detection order (everything included).
     fn cycle_indices(&self) -> Vec<usize> {
         if let Some(order) = &self.character_order {
             order
                 .iter()
-                .filter_map(|name| self.windows.iter().position(|w| &w.title == name))
+                .filter(|e| e.in_cycle)
+                .filter_map(|e| self.windows.iter().position(|w| w.title == e.name))
+                .collect()
+        } else {
+            (0..self.windows.len()).collect()
+        }
+    }
+
+    /// Indices into `self.windows` in display-list order. Unlike
+    /// `cycle_indices`, this keeps scout entries (`in_cycle = false`) so
+    /// the list view still shows them — they just don't participate in
+    /// forward/backward cycling.
+    fn display_indices(&self) -> Vec<usize> {
+        if let Some(order) = &self.character_order {
+            order
+                .iter()
+                .filter_map(|e| self.windows.iter().position(|w| w.title == e.name))
                 .collect()
         } else {
             (0..self.windows.len()).collect()
@@ -49,12 +67,13 @@ impl CycleState {
         }
     }
 
-    /// Windows in the user-configured cycle order. When `character_order`
-    /// is set, returns only logged-in configured characters in that order;
-    /// otherwise falls back to whatever order the window manager reports.
-    /// Used by the list-view renderer so rows stay put as you cycle.
+    /// Windows in the user-configured display order. When
+    /// `character_order` is set, returns every listed character that's
+    /// currently logged in — including scout entries (`in_cycle = false`)
+    /// so the list view still shows them. Falls back to detection order
+    /// when no character list is configured.
     pub fn get_ordered_windows(&self) -> Vec<EveWindow> {
-        self.cycle_indices()
+        self.display_indices()
             .into_iter()
             .map(|i| self.windows[i].clone())
             .collect()
@@ -213,23 +232,23 @@ impl CycleState {
         }
     }
 
-    /// Switch to a specific target number (1-indexed)
-    /// If character_order is provided, uses that to map target -> character name
-    /// Otherwise falls back to window list order
+    /// Switch to a specific target number (1-indexed). When
+    /// `character_order` is provided, target N points at the N-th entry
+    /// in that list — scout entries are reachable this way too, so
+    /// `switch 13` with 12 cyclers + 1 scout still works.
     pub fn switch_to(
         &mut self,
         target: usize,
         wm: &dyn WindowManager,
         minimize_inactive: bool,
-        character_order: Option<&[String]>,
+        character_order: Option<&[CharacterEntry]>,
     ) -> Result<()> {
         if self.windows.is_empty() || target == 0 {
             return Ok(());
         }
 
         let target_index = if let Some(characters) = character_order {
-            // Use character order from characters.txt
-            let target_idx = target - 1; // Convert to 0-indexed
+            let target_idx = target - 1;
             if target_idx >= characters.len() {
                 anyhow::bail!(
                     "Target {} is out of range (only {} characters configured)",
@@ -238,9 +257,8 @@ impl CycleState {
                 );
             }
 
-            let target_name = &characters[target_idx];
+            let target_name = &characters[target_idx].name;
 
-            // Find window matching this character name
             self.windows
                 .iter()
                 .position(|w| w.title == *target_name)
@@ -512,6 +530,17 @@ mod tests {
         assert_eq!(wm.get_activated(), vec![200]);
     }
 
+    fn entry(name: &str) -> CharacterEntry {
+        CharacterEntry::new(name.to_string())
+    }
+
+    fn scout(name: &str) -> CharacterEntry {
+        CharacterEntry {
+            name: name.to_string(),
+            in_cycle: false,
+        }
+    }
+
     #[test]
     fn test_switch_to_with_character_order() {
         let mut state = CycleState::new();
@@ -526,12 +555,57 @@ mod tests {
         let wm = MockWindowManager::new();
 
         // Character order defines: 1=Alpha, 2=Beta, 3=Gamma
-        let char_order = vec!["Alpha".to_string(), "Beta".to_string(), "Gamma".to_string()];
+        let char_order = vec![entry("Alpha"), entry("Beta"), entry("Gamma")];
 
         // Switch to target 1 (Alpha) - should find window 200
         state.switch_to(1, &wm, false, Some(&char_order)).unwrap();
         assert_eq!(state.get_current_index(), 1); // Index of Alpha in windows
         assert_eq!(wm.get_activated(), vec![200]);
+    }
+
+    #[test]
+    fn scout_is_skipped_by_forward_cycle_but_visible_in_list() {
+        let mut state = CycleState::new();
+        state.update_windows(vec![
+            create_test_window(100, "Alpha"),
+            create_test_window(200, "Beta"),
+            create_test_window(300, "Scout"),
+        ]);
+        state.set_character_order(Some(vec![
+            entry("Alpha"),
+            entry("Beta"),
+            scout("Scout"),
+        ]));
+
+        // Display order keeps Scout at position 2 (for the list view).
+        let ordered: Vec<String> = state.get_ordered_windows().into_iter().map(|w| w.title).collect();
+        assert_eq!(ordered, vec!["Alpha", "Beta", "Scout"]);
+
+        // Forward cycle from Alpha lands on Beta, not Scout — then wraps
+        // back to Alpha on the next tick.
+        let wm = MockWindowManager::new();
+        state.current_index = 0;
+        state.cycle_forward(&wm, false).unwrap();
+        assert_eq!(state.get_current_index(), 1); // Beta
+        state.cycle_forward(&wm, false).unwrap();
+        assert_eq!(state.get_current_index(), 0); // wraps to Alpha, skips Scout
+    }
+
+    #[test]
+    fn switch_to_can_target_scout_by_index() {
+        let mut state = CycleState::new();
+        state.update_windows(vec![
+            create_test_window(100, "Alpha"),
+            create_test_window(200, "Beta"),
+            create_test_window(300, "Scout"),
+        ]);
+        let order = vec![entry("Alpha"), entry("Beta"), scout("Scout")];
+        let wm = MockWindowManager::new();
+
+        // switch 3 must reach the scout even though it's not in the cycle.
+        state.switch_to(3, &wm, false, Some(&order)).unwrap();
+        assert_eq!(state.get_current_index(), 2);
+        assert_eq!(wm.get_activated(), vec![300]);
     }
 
     #[test]
@@ -581,7 +655,7 @@ mod tests {
         let wm = MockWindowManager::new();
 
         // Character order includes a character not in windows
-        let char_order = vec!["Alpha".to_string(), "Beta".to_string(), "Gamma".to_string()];
+        let char_order = vec![entry("Alpha"), entry("Beta"), entry("Gamma")];
 
         // Switch to target 3 (Gamma) - not logged in
         let result = state.switch_to(3, &wm, false, Some(&char_order));

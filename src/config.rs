@@ -1,18 +1,128 @@
 use anyhow::{Context, Result};
+use serde::de::{Deserializer, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 /// A single per-character hotkey binding. `vk` is a Win32 Virtual-Key
-/// code; `modifier` is an optional second VK that must be held down
-/// (typically Shift/Ctrl/Alt).
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+/// code; `ctrl`/`shift`/`alt` toggle modifier bits, so combos like
+/// `Ctrl+Num 1` or `Ctrl+Shift+F11` work. The legacy `modifier`
+/// single-VK field is still accepted on deserialize and translated to
+/// the matching bool so existing config.toml files keep working.
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct CharacterHotkey {
     pub vk: u16,
     #[serde(default)]
-    pub modifier: Option<u16>,
+    pub ctrl: bool,
+    #[serde(default)]
+    pub shift: bool,
+    #[serde(default)]
+    pub alt: bool,
+}
+
+impl<'de> Deserialize<'de> for CharacterHotkey {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // Accept both the modern `{ vk, ctrl, shift, alt }` shape and
+        // the legacy `{ vk, modifier }` shape where `modifier` was a VK
+        // code for Shift/Ctrl/Alt. Anything unrecognized in `modifier`
+        // is silently dropped (user can rebind via the panel).
+        #[derive(Deserialize)]
+        struct Raw {
+            vk: u16,
+            #[serde(default)]
+            ctrl: bool,
+            #[serde(default)]
+            shift: bool,
+            #[serde(default)]
+            alt: bool,
+            #[serde(default)]
+            modifier: Option<u16>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        let (mut ctrl, mut shift, mut alt) = (raw.ctrl, raw.shift, raw.alt);
+        if let Some(m) = raw.modifier {
+            match m {
+                0x10 | 0xA0 | 0xA1 => shift = true,
+                0x11 | 0xA2 | 0xA3 => ctrl = true,
+                0x12 | 0xA4 | 0xA5 => alt = true,
+                _ => {}
+            }
+        }
+        Ok(CharacterHotkey {
+            vk: raw.vk,
+            ctrl,
+            shift,
+            alt,
+        })
+    }
+}
+
+/// One character in the cycle list. `in_cycle = false` marks a "scout"
+/// entry: it keeps its slot in the list (and any bound hotkey), and
+/// still shows up in previews / list view, but forward/backward cycling
+/// skips over it.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct CharacterEntry {
+    pub name: String,
+    #[serde(default = "default_true")]
+    pub in_cycle: bool,
+}
+
+impl CharacterEntry {
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            in_cycle: true,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Deserializer for `Config::characters` that accepts three TOML shapes
+/// and materializes all three as `Vec<CharacterEntry>` (with
+/// `in_cycle = true` defaults for legacy bare-string entries):
+///
+///   1. `characters = ["Alpha", "Beta"]` — legacy string array
+///   2. `[[characters]]` tables with `name` + optional `in_cycle`
+///   3. A mix — each element is independently either a string or a table
+fn deserialize_characters<'de, D>(deserializer: D) -> Result<Vec<CharacterEntry>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrEntry {
+        Name(String),
+        Full(CharacterEntry),
+    }
+
+    struct Vis;
+    impl<'de> Visitor<'de> for Vis {
+        type Value = Vec<CharacterEntry>;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a sequence of character names or {name, in_cycle} tables")
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            let mut out = Vec::new();
+            while let Some(el) = seq.next_element::<StringOrEntry>()? {
+                out.push(match el {
+                    StringOrEntry::Name(n) => CharacterEntry::new(n),
+                    StringOrEntry::Full(e) => e,
+                });
+            }
+            Ok(out)
+        }
+    }
+
+    deserializer.deserialize_seq(Vis)
 }
 
 /// How the visible-at-a-glance view of clients is rendered.
@@ -86,12 +196,13 @@ pub struct Config {
     /// daemon runs headless and you cycle via hotkeys / CLI only.
     #[serde(default = "default_show_previews")]
     pub show_previews: bool,
-    /// Ordered list of EVE character names. Forward/backward cycling
-    /// traverses this order; `switch N` maps target N to entry N-1.
-    /// Empty list = cycle through whatever order the window manager
-    /// reports (no stable ordering).
-    #[serde(default)]
-    pub characters: Vec<String>,
+    /// Ordered list of EVE character entries. Forward/backward cycling
+    /// traverses this order (skipping `in_cycle = false` entries);
+    /// `switch N` maps target N to the N-th entry regardless of cycle
+    /// membership. Empty list = cycle through whatever order the window
+    /// manager reports (no stable ordering).
+    #[serde(default, deserialize_with = "deserialize_characters")]
+    pub characters: Vec<CharacterEntry>,
     /// Which on-screen representation of running clients Nicotine shows.
     #[serde(default = "default_display_mode")]
     pub display_mode: DisplayMode,
@@ -323,5 +434,58 @@ mod tests {
         assert_eq!(deserialized.display_width, 7680);
         assert_eq!(deserialized.display_height, 2160);
         assert_eq!(deserialized.eve_width, 4147);
+    }
+
+    #[test]
+    fn legacy_character_strings_deserialize_as_in_cycle() {
+        let toml_src = "\
+display_width = 1920\n\
+display_height = 1080\n\
+panel_height = 0\n\
+eve_width = 1000\n\
+eve_height = 1080\n\
+characters = [\"Alpha\", \"Beta\"]\n";
+        let c: Config = toml::from_str(toml_src).unwrap();
+        assert_eq!(c.characters.len(), 2);
+        assert_eq!(c.characters[0].name, "Alpha");
+        assert!(c.characters[0].in_cycle);
+        assert!(c.characters[1].in_cycle);
+    }
+
+    #[test]
+    fn legacy_hotkey_modifier_translates_to_bool() {
+        let toml_src = "\
+display_width = 1920\n\
+display_height = 1080\n\
+panel_height = 0\n\
+eve_width = 1000\n\
+eve_height = 1080\n\
+[character_hotkeys.Alpha]\n\
+vk = 0x70\n\
+modifier = 0x11\n";
+        let c: Config = toml::from_str(toml_src).unwrap();
+        let hk = &c.character_hotkeys["Alpha"];
+        assert_eq!(hk.vk, 0x70);
+        assert!(hk.ctrl);
+        assert!(!hk.shift);
+        assert!(!hk.alt);
+    }
+
+    #[test]
+    fn scout_entry_round_trips() {
+        let mut config = sample_config();
+        config.characters = vec![
+            CharacterEntry::new("Cycler".into()),
+            CharacterEntry {
+                name: "Scout".into(),
+                in_cycle: false,
+            },
+        ];
+        let toml_str = toml::to_string(&config).unwrap();
+        let back: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(back.characters[0].name, "Cycler");
+        assert!(back.characters[0].in_cycle);
+        assert_eq!(back.characters[1].name, "Scout");
+        assert!(!back.characters[1].in_cycle);
     }
 }

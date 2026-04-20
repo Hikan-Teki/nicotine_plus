@@ -14,6 +14,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT,
     VK_SHIFT,
 };
+use crate::config::CharacterHotkey;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW, PostThreadMessageW, SetWindowsHookExW, HHOOK, MSG, MSLLHOOKSTRUCT,
     WH_MOUSE_LL, WM_HOTKEY, WM_USER, WM_XBUTTONDOWN,
@@ -144,6 +145,20 @@ fn vk_to_modifier(vk: u16) -> HOT_KEY_MODIFIERS {
         v if v == VK_MENU.0 || v == VK_LMENU.0 || v == VK_RMENU.0 => MOD_ALT,
         _ => HOT_KEY_MODIFIERS(0),
     }
+}
+
+fn hotkey_modifiers(hk: &CharacterHotkey) -> HOT_KEY_MODIFIERS {
+    let mut m = HOT_KEY_MODIFIERS(0);
+    if hk.ctrl {
+        m |= MOD_CONTROL;
+    }
+    if hk.shift {
+        m |= MOD_SHIFT;
+    }
+    if hk.alt {
+        m |= MOD_ALT;
+    }
+    m
 }
 
 /// Spawn the Windows input listener thread. The thread installs a low-level
@@ -310,30 +325,29 @@ unsafe fn do_register_hotkeys(config: &Config) {
 
     // Per-character hotkeys — iterate the characters list in order so
     // hotkey IDs are stable for the same config, and populate the
-    // ID → name lookup.
+    // ID → name lookup. Scout entries (`in_cycle = false`) still get
+    // their hotkey registered — that's the whole point of marking a
+    // character as scout.
     let mut lookup = character_lookup().lock().unwrap();
     lookup.clear();
     let mut next_id = HOTKEY_CHARACTER_BASE;
-    for name in &config.characters {
-        let Some(hk) = config.character_hotkeys.get(name) else {
+    for entry in &config.characters {
+        let Some(hk) = config.character_hotkeys.get(&entry.name) else {
             continue;
         };
-        // vk == 0 is a placeholder entry — the user picked a modifier
+        // vk == 0 is a placeholder entry — the user picked modifiers
         // but hasn't captured a key yet. Skip registration; the entry
         // becomes active only once a real VK is bound.
         if hk.vk == 0 {
             continue;
         }
-        let modifier = hk
-            .modifier
-            .map(vk_to_modifier)
-            .unwrap_or(HOT_KEY_MODIFIERS(0));
+        let modifier = hotkey_modifiers(hk);
         if RegisterHotKey(None, next_id, modifier, hk.vk as u32).is_ok() {
-            lookup.insert(next_id, name.clone());
+            lookup.insert(next_id, entry.name.clone());
         } else {
             eprintln!(
                 "Failed to register per-character hotkey for '{}' (another app may own it)",
-                name
+                entry.name
             );
         }
         next_id += 1;

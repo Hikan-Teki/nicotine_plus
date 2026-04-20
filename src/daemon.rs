@@ -1,4 +1,4 @@
-use crate::config::{Config, LiveSettings};
+use crate::config::{CharacterEntry, Config, LiveSettings};
 use crate::cycle_state::CycleState;
 use crate::ipc;
 use crate::window_manager::WindowManager;
@@ -41,7 +41,7 @@ pub struct Daemon {
     wm: Arc<dyn WindowManager>,
     state: Arc<Mutex<CycleState>>,
     config: Config,
-    character_order: Option<Vec<String>>,
+    character_order: Option<Vec<CharacterEntry>>,
     live: Arc<Mutex<LiveSettings>>,
 }
 
@@ -96,7 +96,7 @@ impl Daemon {
         // within ~500ms — no daemon restart needed.
         let wm_clone = Arc::clone(&self.wm);
         let state_clone = Arc::clone(&self.state);
-        let mut last_order: Option<Vec<String>> = if self.config.characters.is_empty() {
+        let mut last_order: Option<Vec<CharacterEntry>> = if self.config.characters.is_empty() {
             None
         } else {
             Some(self.config.characters.clone())
