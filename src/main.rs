@@ -15,6 +15,7 @@ mod ipc;
 mod lock;
 mod paths;
 mod preview_windows;
+mod tray;
 mod version_check;
 mod window_manager;
 mod windows_input;

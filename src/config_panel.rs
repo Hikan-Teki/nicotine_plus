@@ -1,4 +1,5 @@
 use crate::config::{CharacterEntry, CharacterHotkey, Config, DisplayMode, LiveSettings};
+use crate::tray::{self, Tray, TrayEvent};
 use eframe::egui;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -101,6 +102,15 @@ pub struct ConfigPanel {
     /// actually changes — re-sending the same size every frame wastes
     /// work and can cause visual jitter.
     last_applied_height: f32,
+    /// Live tray icon. Spawned lazily the first time the user turns on
+    /// `minimize_to_tray_on_close` so users who never opt in never see
+    /// an extra icon in their notification area. `None` until that
+    /// happens (or if the tray failed to spawn).
+    tray: Option<Tray>,
+    /// Set when the tray menu fires `TrayEvent::Exit`. Checked after
+    /// we've drained the event channel so the exit path overrides any
+    /// concurrent hide-to-tray request in the same frame.
+    exit_requested: bool,
 }
 
 impl ConfigPanel {
@@ -141,6 +151,21 @@ impl ConfigPanel {
         // solid) to signal hover / active clearly.
         cc.egui_ctx.set_visuals(build_visuals());
 
+        // Spawn the tray up front when the user has already opted in
+        // (via a persisted config). Spawn-on-toggle handles the first-
+        // time-enable path from within update().
+        let tray = if config.minimize_to_tray_on_close {
+            match tray::spawn() {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    eprintln!("sistem tepsisi başlatılamadı: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Self {
             config,
             new_character_buffer: String::new(),
@@ -150,6 +175,8 @@ impl ConfigPanel {
             capture_buf: CaptureBuffer::new(),
             last_change: None,
             last_applied_height: 0.0,
+            tray,
+            exit_requested: false,
         }
     }
 
@@ -216,6 +243,50 @@ fn build_visuals() -> egui::Visuals {
 
 impl eframe::App for ConfigPanel {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // ---- Tray: lazy spawn + event drain ----
+        // The tray is kept alive for the rest of the session once
+        // spawned, even if the user toggles `minimize_to_tray_on_close`
+        // off later. Shell_NotifyIcon's global Sender uses a OnceLock,
+        // so re-spawn isn't supported in-process; keeping the icon live
+        // also doubles as a "Inari is running" indicator.
+        if self.tray.is_none() && self.config.minimize_to_tray_on_close {
+            match tray::spawn() {
+                Ok(t) => self.tray = Some(t),
+                Err(e) => eprintln!("sistem tepsisi başlatılamadı: {}", e),
+            }
+        }
+        if let Some(tray) = &self.tray {
+            while let Some(event) = tray.try_recv() {
+                match event {
+                    TrayEvent::Show => {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    }
+                    TrayEvent::Exit => {
+                        self.exit_requested = true;
+                    }
+                }
+            }
+        }
+
+        // ---- Close handling ----
+        // When the user clicks the X:
+        //   * tray-exit just happened → let the close proceed
+        //   * setting is on + tray is live → cancel the close and hide
+        //     the window (stays accessible through the tray icon)
+        //   * otherwise → default behavior, app exits
+        if ctx.input(|i| i.viewport().close_requested()) {
+            if self.exit_requested {
+                // Fall through — viewport closes normally.
+            } else if self.config.minimize_to_tray_on_close && self.tray.is_some() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            }
+        }
+        if self.exit_requested {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+
         // ---- Capture mode: listen for the next keypress ----
         // We poll Win32 GetAsyncKeyState rather than egui's key stream
         // because egui doesn't distinguish top-row digits from numpad
@@ -512,6 +583,24 @@ impl ConfigPanel {
             // drags immediately — no save + restart needed.
             self.live.lock().unwrap().positions_locked = self.config.positions_locked;
         }
+
+        ui.add_space(4.0);
+        let prev_tray = self.config.minimize_to_tray_on_close;
+        ui.checkbox(
+            &mut self.config.minimize_to_tray_on_close,
+            "Kapatma (X) tuşuna basınca sistem tepsisine küçült",
+        );
+        if self.config.minimize_to_tray_on_close != prev_tray {
+            self.touch();
+        }
+        ui.label(
+            egui::RichText::new(
+                "Tepsi ikonuna sol tıkla pencereyi geri getirir; sağ tıkla \
+                 açılan menüden \"Çıkış\" ile Inari'yi tamamen kapatabilirsiniz.",
+            )
+            .size(10.0)
+            .color(INARI_TEXT_MUTED),
+        );
     }
 
     fn draw_characters_section(&mut self, ui: &mut egui::Ui) {

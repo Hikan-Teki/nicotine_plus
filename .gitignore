@@ -18,3 +18,6 @@ target/
 
 # Claude Code project context — local only, not for upstream
 CLAUDE.md
+
+# Local vcvars wrappers (paths are developer-specific)
+build-*.bat

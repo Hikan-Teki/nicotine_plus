@@ -217,6 +217,12 @@ pub struct Config {
     /// without reassigning keys.
     #[serde(default)]
     pub character_hotkeys: HashMap<String, CharacterHotkey>,
+    /// When true, clicking the window's X button hides Inari to the
+    /// system tray instead of quitting. The tray icon restores the
+    /// window on left-click; right-click opens a menu with a hard
+    /// "Çıkış" (Exit) option.
+    #[serde(default)]
+    pub minimize_to_tray_on_close: bool,
 }
 
 // Off by default — most users remap side buttons at the driver level
@@ -329,6 +335,7 @@ impl Config {
             display_mode: default_display_mode(),
             positions_locked: false,
             character_hotkeys: HashMap::new(),
+            minimize_to_tray_on_close: false,
         }
     }
 
@@ -402,6 +409,7 @@ mod tests {
             display_mode: DisplayMode::Previews,
             positions_locked: false,
             character_hotkeys: HashMap::new(),
+            minimize_to_tray_on_close: false,
         }
     }
 
