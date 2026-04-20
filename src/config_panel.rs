@@ -517,6 +517,17 @@ impl ConfigPanel {
         let mut dirty = false;
 
         let len = self.config.characters.len();
+        // Cap the visible list height so large rosters don't blow the
+        // window past the screen — each entry is two rows, and ~6–7
+        // entries fit in ~440px. Anything beyond that scrolls
+        // internally. auto_shrink lets the scroll area stay compact
+        // when the roster is small.
+        const CHARACTER_LIST_MAX_HEIGHT: f32 = 440.0;
+        egui::ScrollArea::vertical()
+            .id_salt("characters_scroll")
+            .max_height(CHARACTER_LIST_MAX_HEIGHT)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
         for idx in 0..len {
             // Row 1 — name + reorder + delete.
             ui.horizontal(|ui| {
@@ -606,6 +617,7 @@ impl ConfigPanel {
 
             ui.add_space(2.0);
         }
+            });
 
         if dirty {
             self.touch();
