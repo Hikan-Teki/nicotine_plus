@@ -6,8 +6,30 @@ on:
       - 'v*'
 
 jobs:
+  verify-version:
+    # Fails fast if the git tag's version (e.g. `v0.4.3`) doesn't match
+    # `version = "..."` in Cargo.toml. Prevents shipping a binary whose
+    # baked-in CARGO_PKG_VERSION disagrees with the release label — the
+    # exact class of bug that produced the v0.4.2 loop where every
+    # installed binary showed "NEW VERSION AVAILABLE" pointing at itself.
+    name: Verify tag matches Cargo.toml version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare versions
+        run: |
+          CARGO_VERSION=$(grep -E '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          echo "Cargo.toml: $CARGO_VERSION"
+          echo "Git tag:    $TAG_VERSION"
+          if [ "$CARGO_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Cargo.toml version ($CARGO_VERSION) does not match tag ($TAG_VERSION). Bump Cargo.toml and commit before tagging."
+            exit 1
+          fi
+
   build:
     name: Build Linux release binaries
+    needs: verify-version
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -45,6 +67,7 @@ jobs:
 
   build-windows:
     name: Build Windows release binary
+    needs: verify-version
     runs-on: ubuntu-latest
 
     steps:

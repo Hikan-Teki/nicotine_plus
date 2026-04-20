@@ -1698,7 +1698,7 @@ dependencies = [
 
 [[package]]
 name = "nicotine"
-version = "0.4.1"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "daemonize",
