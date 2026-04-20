@@ -1,6 +1,6 @@
 [package]
 name = "inari"
-version = "1.1.0"
+version = "1.1.1"
 edition = "2021"
 description = "Inari Syndicate için EVE Online multiboxing aracı"
 license = "MIT"
@@ -35,6 +35,11 @@ eframe = { version = "0.29", default-features = false, features = [
   "default_fonts",
   "glow",
 ] }
+# Matches the version eframe 0.29 pulls in transitively; needed to
+# extract the HWND from CreationContext for the tray→main-window
+# ShowWindow workaround (winit won't repaint a hidden window, so we
+# drive show/hide directly via Win32).
+raw-window-handle = "0.6"
 windows = { version = "0.59", features = [
   "Win32_Foundation",
   "Win32_UI_WindowsAndMessaging",

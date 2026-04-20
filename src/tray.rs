@@ -22,13 +22,14 @@ use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-    DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, LoadIconW, LoadImageW,
-    PostMessageW, PostQuitMessage, RegisterClassExW, SetForegroundWindow, TrackPopupMenu,
-    TranslateMessage, HCURSOR, HICON, HMENU, HWND_MESSAGE, IDI_APPLICATION, IMAGE_ICON,
-    LR_DEFAULTCOLOR, LR_SHARED, MF_SEPARATOR, MF_STRING, MSG, SM_CXSMICON, SM_CYSMICON,
-    TPM_BOTTOMALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WM_APP, WM_COMMAND,
-    WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSEXW, WS_OVERLAPPED,
+    AppendMenuW, BringWindowToTop, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
+    DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, IsIconic,
+    LoadIconW, LoadImageW, PostMessageW, PostQuitMessage, RegisterClassExW, SetForegroundWindow,
+    ShowWindow, TrackPopupMenu, TranslateMessage, HCURSOR, HICON, HMENU, HWND_MESSAGE,
+    IDI_APPLICATION, IMAGE_ICON, LR_DEFAULTCOLOR, LR_SHARED, MF_SEPARATOR, MF_STRING, MSG,
+    SM_CXSMICON, SM_CYSMICON, SW_HIDE, SW_RESTORE, SW_SHOW, TPM_BOTTOMALIGN, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP,
+    WM_RBUTTONUP, WNDCLASSEXW, WS_OVERLAPPED,
 };
 
 /// Shell_NotifyIconW delivers tray-icon events to our wndproc with this
@@ -55,6 +56,28 @@ pub enum TrayEvent {
 /// bare C callback with no user data, so it reaches back to us via this
 /// global. We only ever spawn one tray per process lifetime.
 static EVENT_TX: OnceLock<Sender<TrayEvent>> = OnceLock::new();
+/// egui context handle, set alongside EVENT_TX so the tray thread can
+/// wake the main eframe loop after posting an event. Without this the
+/// main window stays idle when hidden and never drains the channel.
+static EGUI_CTX: OnceLock<egui::Context> = OnceLock::new();
+/// Raw HWND of the eframe/winit main window. Stored as `isize` so the
+/// OnceLock stays Send/Sync. We drive show/hide directly via Win32
+/// because winit's `request_redraw` doesn't fire `RedrawRequested` for
+/// hidden windows on Windows (Windows suppresses WM_PAINT while hidden),
+/// which means eframe never calls `update()` and can't see any
+/// `ViewportCommand::Visible(true)` we might queue.
+static MAIN_HWND: OnceLock<isize> = OnceLock::new();
+
+/// Wire the main-window HWND in before spawning the tray. Safe to call
+/// more than once — only the first value sticks, matching the single-
+/// tray-per-process lifecycle.
+pub fn set_main_hwnd(hwnd: isize) {
+    let _ = MAIN_HWND.set(hwnd);
+}
+
+fn main_hwnd() -> Option<HWND> {
+    MAIN_HWND.get().map(|h| HWND(*h as *mut _))
+}
 
 /// Live tray-icon handle. Dropping this posts WM_DESTROY to the tray
 /// thread so it unregisters the icon and exits its message loop.
@@ -90,11 +113,12 @@ impl Drop for Tray {
 /// registering the icon (or failed). Idempotent across process lifetime
 /// only in the sense that calling it twice returns an error — the
 /// EVENT_TX OnceLock can't be re-initialized.
-pub fn spawn() -> Result<Tray> {
+pub fn spawn(ctx: egui::Context) -> Result<Tray> {
     let (event_tx, event_rx) = channel::<TrayEvent>();
     EVENT_TX
         .set(event_tx)
         .map_err(|_| anyhow!("tray zaten oluşturulmuş"))?;
+    let _ = EGUI_CTX.set(ctx);
 
     // Signal back once the icon is registered, so callers can count on
     // the tray being live before we return.
@@ -236,6 +260,7 @@ extern "system" fn tray_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LP
                 // lParam. High word is the icon id.
                 let event = (lparam.0 as u32) & 0xFFFF;
                 if event == WM_LBUTTONUP {
+                    show_main_window();
                     send_event(TrayEvent::Show);
                 } else if event == WM_RBUTTONUP {
                     show_context_menu(hwnd);
@@ -263,13 +288,66 @@ fn send_event(event: TrayEvent) {
     if let Some(tx) = EVENT_TX.get() {
         let _ = tx.send(event);
     }
+    // Wake the eframe loop; when the main window is hidden it's idle
+    // and would otherwise never poll the channel.
+    if let Some(ctx) = EGUI_CTX.get() {
+        ctx.request_repaint();
+    }
 }
 
 fn dispatch_menu_command(id: usize) {
     match id {
-        MENU_SHOW => send_event(TrayEvent::Show),
-        MENU_EXIT => send_event(TrayEvent::Exit),
+        MENU_SHOW => {
+            show_main_window();
+            send_event(TrayEvent::Show);
+        }
+        MENU_EXIT => {
+            // Surface the window first so eframe's winit loop gets a
+            // WM_PAINT and actually runs `update()` to see the exit
+            // request. A purely-hidden window would swallow the WM_CLOSE
+            // repaint-less, and the app would linger.
+            show_main_window();
+            send_event(TrayEvent::Exit);
+            if let Some(hwnd) = main_hwnd() {
+                unsafe {
+                    let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+                }
+            }
+        }
         _ => {}
+    }
+}
+
+/// Force the main window visible and in the foreground. Uses the raw
+/// HWND — eframe/winit can't drive this path on its own for a window
+/// that's currently hidden.
+fn show_main_window() {
+    let Some(hwnd) = main_hwnd() else {
+        return;
+    };
+    unsafe {
+        // SW_RESTORE covers the minimized-then-hidden case; SW_SHOW
+        // alone wouldn't un-minimize.
+        let cmd = if IsIconic(hwnd).as_bool() {
+            SW_RESTORE
+        } else {
+            SW_SHOW
+        };
+        let _ = ShowWindow(hwnd, cmd);
+        let _ = BringWindowToTop(hwnd);
+        let _ = SetForegroundWindow(hwnd);
+    }
+}
+
+/// Hide the main window at the Win32 level. Bypasses
+/// `ViewportCommand::Visible(false)` because eframe's hidden state
+/// prevents later show commands from being processed.
+pub fn hide_main_window() {
+    let Some(hwnd) = main_hwnd() else {
+        return;
+    };
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_HIDE);
     }
 }
 

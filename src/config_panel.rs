@@ -1,6 +1,7 @@
 use crate::config::{CharacterEntry, CharacterHotkey, Config, DisplayMode, LiveSettings};
 use crate::tray::{self, Tray, TrayEvent};
 use eframe::egui;
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
@@ -151,11 +152,22 @@ impl ConfigPanel {
         // solid) to signal hover / active clearly.
         cc.egui_ctx.set_visuals(build_visuals());
 
+        // Feed the main-window HWND into the tray module before anyone
+        // calls `tray::spawn`. The tray uses it to drive Win32
+        // ShowWindow directly — eframe/winit won't repaint a hidden
+        // window on Windows, so ViewportCommand-based restore is a
+        // dead-end once we're in the tray.
+        if let Ok(handle) = cc.window_handle() {
+            if let RawWindowHandle::Win32(h) = handle.as_raw() {
+                tray::set_main_hwnd(h.hwnd.get());
+            }
+        }
+
         // Spawn the tray up front when the user has already opted in
         // (via a persisted config). Spawn-on-toggle handles the first-
         // time-enable path from within update().
         let tray = if config.minimize_to_tray_on_close {
-            match tray::spawn() {
+            match tray::spawn(cc.egui_ctx.clone()) {
                 Ok(t) => Some(t),
                 Err(e) => {
                     eprintln!("sistem tepsisi başlatılamadı: {}", e);
@@ -250,7 +262,7 @@ impl eframe::App for ConfigPanel {
         // so re-spawn isn't supported in-process; keeping the icon live
         // also doubles as a "Inari is running" indicator.
         if self.tray.is_none() && self.config.minimize_to_tray_on_close {
-            match tray::spawn() {
+            match tray::spawn(ctx.clone()) {
                 Ok(t) => self.tray = Some(t),
                 Err(e) => eprintln!("sistem tepsisi başlatılamadı: {}", e),
             }
@@ -259,7 +271,10 @@ impl eframe::App for ConfigPanel {
             while let Some(event) = tray.try_recv() {
                 match event {
                     TrayEvent::Show => {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        // The actual ShowWindow happened on the tray
+                        // thread (see tray::show_main_window). Nudging
+                        // focus through egui here keeps the internal
+                        // focus state in sync with the Win32 reality.
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                     }
                     TrayEvent::Exit => {
@@ -273,14 +288,16 @@ impl eframe::App for ConfigPanel {
         // When the user clicks the X:
         //   * tray-exit just happened → let the close proceed
         //   * setting is on + tray is live → cancel the close and hide
-        //     the window (stays accessible through the tray icon)
+        //     via raw Win32 (ViewportCommand::Visible(false) works, but
+        //     Visible(true) can't revive it — Windows suppresses
+        //     WM_PAINT for hidden windows so eframe never calls us back)
         //   * otherwise → default behavior, app exits
         if ctx.input(|i| i.viewport().close_requested()) {
             if self.exit_requested {
                 // Fall through — viewport closes normally.
             } else if self.config.minimize_to_tray_on_close && self.tray.is_some() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                tray::hide_main_window();
             }
         }
         if self.exit_requested {
