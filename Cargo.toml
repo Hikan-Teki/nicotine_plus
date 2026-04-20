@@ -1,6 +1,6 @@
 [package]
 name = "inari"
-version = "0.4.3"
+version = "1.0.0"
 edition = "2021"
 description = "Inari Syndicate için EVE Online multiboxing aracı"
 license = "MIT"
