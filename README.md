@@ -19,7 +19,7 @@ High-performance EVE Online multiboxing tool for Windows, inspired by EVE-O Prev
 
 ## Quick Install
 
-Grab the latest `Nicotine.exe` from the [GitHub Releases page](https://github.com/isomerc/nicotine/releases) and double-click to launch. The config panel opens on first run and a default `config.toml` is generated at `%APPDATA%\nicotine\config.toml`.
+Grab the latest `Nicotine.exe` from the [GitHub Releases page](https://github.com/Hikan-Teki/nicotine_plus/releases) and double-click to launch. The config panel opens on first run and a default `config.toml` is generated at `%APPDATA%\nicotine\config.toml`.
 
 ## Usage
 

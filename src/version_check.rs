@@ -4,7 +4,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
-const GITHUB_API_URL: &str = "https://api.github.com/repos/isomerc/nicotine/releases/latest";
+const GITHUB_API_URL: &str = "https://api.github.com/repos/Hikan-Teki/nicotine_plus/releases/latest";
 const TIMEOUT_SECS: u64 = 5;
 
 /// Three-state update status. `None`-wrapped at the cache layer to

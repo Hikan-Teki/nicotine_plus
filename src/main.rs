@@ -226,7 +226,7 @@ fn main() -> Result<()> {
                 println!("🚬 N I C O T I N E 🚬");
                 println!();
                 println!("Questions or suggestions?");
-                println!("Reach out to isomerc on Discord or open a Github issue");
+                println!("Open a Github issue for questions or suggestions");
                 println!();
                 println!("Usage:");
                 println!("  nicotine start         - Start everything (daemon + previews)");

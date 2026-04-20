@@ -4,7 +4,7 @@ version = "0.4.3"
 edition = "2021"
 description = "High-performance EVE Online multiboxing tool for Windows"
 license = "MIT"
-repository = "https://github.com/isomerc/nicotine"
+repository = "https://github.com/Hikan-Teki/nicotine_plus"
 
 # Capitalized so Windows Explorer shows `Nicotine.exe` (standard
 # convention for user-facing apps like Discord.exe, Chrome.exe).

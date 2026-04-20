@@ -269,7 +269,7 @@ impl eframe::App for ConfigPanel {
                     // against the cream background.
                     ui.hyperlink_to(
                         egui::RichText::new("GITHUB").strong().color(NICOTINE_RED),
-                        "https://github.com/isomerc",
+                        "https://github.com/Hikan-Teki/nicotine_plus",
                     );
 
                     // Right-aligned update badge. `right_to_left`
