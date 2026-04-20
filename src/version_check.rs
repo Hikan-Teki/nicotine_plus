@@ -48,7 +48,7 @@ pub fn get_update_status() -> Option<UpdateStatus> {
 fn fetch_status() -> Result<UpdateStatus> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(TIMEOUT_SECS))
-        .user_agent("nicotine")
+        .user_agent("inari")
         .build()
         .context("HTTP istemcisi oluşturulamadı")?;
 

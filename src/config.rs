@@ -274,7 +274,7 @@ fn default_display_mode() -> DisplayMode {
 impl Config {
     fn config_dir() -> PathBuf {
         let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
-        path.push("nicotine");
+        path.push("inari");
         path
     }
 

@@ -1,6 +1,6 @@
 // Build script: generate a multi-size Windows ICO from assets/icon.png
 // and embed it as the executable's icon resource so Explorer shows the
-// Nicotine logo on nicotine.exe. Only runs when the target is Windows.
+// Inari logo on Inari.exe. Only runs when the target is Windows.
 //
 // We do the PNG→ICO conversion in Rust (image + ico crates) so there's
 // no external image tool required on the host. For the .res compile we
@@ -22,7 +22,7 @@ fn main() {
     }
 
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
-    let ico_path = out_dir.join("nicotine.ico");
+    let ico_path = out_dir.join("inari.ico");
     generate_ico(&ico_path);
 
     match compile_res(&out_dir, &ico_path) {
@@ -41,7 +41,7 @@ fn main() {
     }
 }
 
-/// Generate `nicotine.ico` with standard Windows icon sizes.
+/// Generate `inari.ico` with standard Windows icon sizes.
 fn generate_ico(out: &Path) {
     let png_bytes = include_bytes!("assets/icon.png");
     let img = image::load_from_memory(png_bytes).expect("decode icon.png");
@@ -62,8 +62,8 @@ fn generate_ico(out: &Path) {
 /// Compile a minimal .rc that references the icon into a .res. Returns
 /// the path to the .res so the caller can hand it to the linker.
 fn compile_res(out_dir: &Path, ico_path: &Path) -> Result<PathBuf, String> {
-    let rc_path = out_dir.join("nicotine.rc");
-    let res_path = out_dir.join("nicotine.res");
+    let rc_path = out_dir.join("inari.rc");
+    let res_path = out_dir.join("inari.res");
 
     // Resource compilers are picky about backslashes; escape them.
     let ico_rc_literal = ico_path.to_string_lossy().replace('\\', "\\\\");

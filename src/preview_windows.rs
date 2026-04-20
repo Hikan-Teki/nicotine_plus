@@ -186,9 +186,9 @@ fn px(n: i32) -> i32 {
     (n as f32 * dpi_scale()).round() as i32
 }
 
-const PREVIEW_CLASS: &str = "NicotinePreviewWnd\0";
-const CONTROL_CLASS: &str = "NicotinePreviewCtrl\0";
-const LIST_CLASS: &str = "NicotineListWnd\0";
+const PREVIEW_CLASS: &str = "InariPreviewWnd\0";
+const CONTROL_CLASS: &str = "InariPreviewCtrl\0";
+const LIST_CLASS: &str = "InariListWnd\0";
 
 // Chrome dimensions below are "reference pixels" at 96 DPI. Every use
 // site wraps them in `px(...)` so they render at the correct physical
@@ -212,15 +212,15 @@ const DRAG_THRESHOLD_PX: i32 = 4;
 /// between previews.
 const SNAP_THRESHOLD: i32 = 12;
 
-/// Win32 COLORREF is 0x00BBGGRR. Nicotine red is RGB(196, 30, 58).
-const NICOTINE_RED: COLORREF = COLORREF(0x003A_1EC4);
-/// Dark chrome color used for inactive previews — same as the title strip
-/// so the border blends in until a client becomes active.
-const CHROME_DARK: COLORREF = COLORREF(0x0000_0000);
-/// Cream background for the list window body (RGB 252, 250, 242).
-const NICOTINE_CREAM: COLORREF = COLORREF(0x00F2_FAFC);
-/// Text color for inactive rows in the list window.
-const LIST_TEXT_BLACK: COLORREF = COLORREF(0x0000_0000);
+/// Win32 COLORREF is 0x00BBGGRR. Inari orange is RGB(255, 119, 0).
+const INARI_ORANGE: COLORREF = COLORREF(0x0000_77FF);
+/// Deep navy chrome used for inactive previews and the list window bg.
+/// RGB(10, 14, 26).
+const INARI_BG_PRIMARY: COLORREF = COLORREF(0x001A_0E0A);
+/// Slightly elevated navy for list window body. RGB(15, 21, 37).
+const INARI_BG_SECONDARY: COLORREF = COLORREF(0x0025_150F);
+/// Off-white text color for list rows. RGB(240, 240, 245).
+const INARI_TEXT: COLORREF = COLORREF(0x00F5_F0F0);
 
 /// Per-character preview window position. Persisted to disk so previews come
 /// back at the same place across daemon restarts.
@@ -239,7 +239,7 @@ pub struct PreviewPositions {
 impl PreviewPositions {
     fn config_path() -> PathBuf {
         let mut p = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
-        p.push("nicotine");
+        p.push("inari");
         p.push("preview_positions.toml");
         p
     }
@@ -518,7 +518,7 @@ impl PreviewManager {
     fn create_list_window(&mut self) -> Result<()> {
         let module = unsafe { GetModuleHandleW(None) }.context("GetModuleHandleW failed")?;
         let class_name: Vec<u16> = LIST_CLASS.encode_utf16().collect();
-        let title: Vec<u16> = "Nicotine\0".encode_utf16().collect();
+        let title: Vec<u16> = "Inari\0".encode_utf16().collect();
 
         let windows_len = self.state.lock().unwrap().get_windows().len();
         let height = list_window_height(windows_len);
@@ -918,16 +918,16 @@ unsafe extern "system" fn preview_wnd_proc(
     }
 }
 
-/// Register JetBrains Mono + Marlboro with GDI from bytes embedded in the
-/// binary. After this runs, CreateFontIndirectW can locate both fonts by
-/// family name. Idempotent — GDI refcounts the underlying data on repeat
+/// Register Inter + Exo 2 with GDI from bytes embedded in the binary.
+/// After this runs, CreateFontIndirectW can locate both fonts by family
+/// name. Idempotent — GDI refcounts the underlying data on repeat
 /// calls, and the OnceLock ensures we only do it once per process.
 fn register_embedded_fonts() {
     static ONCE: OnceLock<()> = OnceLock::new();
     ONCE.get_or_init(|| {
         const FONTS: &[&[u8]] = &[
-            include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf"),
-            include_bytes!("../assets/fonts/Marlboro.ttf"),
+            include_bytes!("../assets/fonts/Inter-Variable.ttf"),
+            include_bytes!("../assets/fonts/Exo2-Variable.ttf"),
         ];
         for bytes in FONTS {
             let count: u32 = 0;
@@ -959,24 +959,24 @@ unsafe fn create_font(face: &str, height: i32) -> HFONT {
     CreateFontIndirectW(&logfont)
 }
 
-/// JetBrains Mono for body text — character names on preview titles and
-/// on list rows. Matches the config panel's body font.
+/// Inter for body text — character names on preview titles and on list
+/// rows. Matches the config panel's body font.
 fn nicotine_body_font() -> HFONT {
     static SLOT: OnceLock<isize> = OnceLock::new();
     let raw = *SLOT.get_or_init(|| {
         register_embedded_fonts();
-        unsafe { create_font("JetBrains Mono", px(-14)).0 as isize }
+        unsafe { create_font("Inter", px(-14)).0 as isize }
     });
     HFONT(raw as *mut _)
 }
 
-/// Marlboro for the list window's "NICOTINE" title strip — matches the
-/// config panel's header.
+/// Exo 2 for the list window's "INARI" title strip — matches the config
+/// panel's header.
 fn nicotine_logo_font() -> HFONT {
     static SLOT: OnceLock<isize> = OnceLock::new();
     let raw = *SLOT.get_or_init(|| {
         register_embedded_fonts();
-        unsafe { create_font("Marlboro", px(-20)).0 as isize }
+        unsafe { create_font("Exo 2", px(-20)).0 as isize }
     });
     HFONT(raw as *mut _)
 }
@@ -995,7 +995,7 @@ unsafe fn paint_chrome(hwnd: HWND, character_name: &str, is_active: bool) {
     let width = rect.right - rect.left;
     let height = rect.bottom - rect.top;
 
-    let chrome_color = if is_active { NICOTINE_RED } else { CHROME_DARK };
+    let chrome_color = if is_active { INARI_ORANGE } else { INARI_BG_PRIMARY };
     let chrome_brush = CreateSolidBrush(chrome_color);
     let title_h = px(TITLE_HEIGHT);
     let border_w = px(BORDER_WIDTH);
@@ -1034,9 +1034,15 @@ unsafe fn paint_chrome(hwnd: HWND, character_name: &str, is_active: bool) {
 
     let _ = DeleteObject(chrome_brush.into());
 
-    // White centered character name in the title strip.
+    // Centered character name in the title strip. Dark text against the
+    // bright orange active strip for contrast; off-white when inactive.
     let _ = SetBkMode(hdc, TRANSPARENT);
-    let _ = SetTextColor(hdc, COLORREF(0x00FF_FFFF));
+    let text_color = if is_active {
+        INARI_BG_PRIMARY
+    } else {
+        INARI_TEXT
+    };
+    let _ = SetTextColor(hdc, text_color);
     let body_font = nicotine_body_font();
     let prev_font = SelectObject(hdc, body_font.into());
     let mut text: Vec<u16> = character_name.encode_utf16().collect();
@@ -1161,8 +1167,8 @@ unsafe fn paint_list(hwnd: HWND) {
     let title_h = px(TITLE_HEIGHT);
     let row_h = px(LIST_ROW_HEIGHT);
 
-    // Cream body
-    let body_brush = CreateSolidBrush(NICOTINE_CREAM);
+    // Dark navy body
+    let body_brush = CreateSolidBrush(INARI_BG_SECONDARY);
     let body_rect = RECT {
         left: 0,
         top: title_h,
@@ -1172,8 +1178,8 @@ unsafe fn paint_list(hwnd: HWND) {
     FillRect(hdc, &body_rect, body_brush);
     let _ = DeleteObject(body_brush.into());
 
-    // Red title strip
-    let title_brush = CreateSolidBrush(NICOTINE_RED);
+    // Dark title strip with an orange underline.
+    let title_brush = CreateSolidBrush(INARI_BG_PRIMARY);
     let title_rect = RECT {
         left: 0,
         top: 0,
@@ -1185,11 +1191,11 @@ unsafe fn paint_list(hwnd: HWND) {
 
     let _ = SetBkMode(hdc, TRANSPARENT);
 
-    // Title text — Marlboro logo font, matching the config panel header.
-    let _ = SetTextColor(hdc, COLORREF(0x00FF_FFFF));
+    // Title text — Exo 2 logo font in orange, matching the config panel header.
+    let _ = SetTextColor(hdc, INARI_ORANGE);
     let logo_font = nicotine_logo_font();
     let prev_title_font = SelectObject(hdc, logo_font.into());
-    let mut title_text: Vec<u16> = "Nicotine".encode_utf16().collect();
+    let mut title_text: Vec<u16> = "Inari".encode_utf16().collect();
     let mut title_draw_rect = title_rect;
     let _ = DrawTextW(
         hdc,
@@ -1224,15 +1230,11 @@ unsafe fn paint_list(hwnd: HWND) {
     for window in &windows {
         let is_active = window.id == active_id;
         let text = if is_active {
-            format!("🚬 {}", window.title)
+            format!("🦊 {}", window.title)
         } else {
             format!("     {}", window.title)
         };
-        let color = if is_active {
-            NICOTINE_RED
-        } else {
-            LIST_TEXT_BLACK
-        };
+        let color = if is_active { INARI_ORANGE } else { INARI_TEXT };
         let _ = SetTextColor(hdc, color);
         let mut row_buf: Vec<u16> = text.encode_utf16().collect();
         let mut row_rect = RECT {
@@ -1276,7 +1278,7 @@ fn register_classes(module: HMODULE) -> Result<()> {
         // sub-pixel anti-aliased edge of the thumbnail) shows whatever was
         // last in the buffer — typically white. Erasing to chrome dark
         // first means those edges blend invisibly with our chrome.
-        let preview_bg = CreateSolidBrush(CHROME_DARK);
+        let preview_bg = CreateSolidBrush(INARI_BG_PRIMARY);
 
         let preview_class: Vec<u16> = PREVIEW_CLASS.encode_utf16().collect();
         let preview_wc = WNDCLASSEXW {
@@ -1315,9 +1317,9 @@ fn register_classes(module: HMODULE) -> Result<()> {
         };
         let _ = RegisterClassExW(&control_wc);
 
-        // List window class — opaque cream background erased via
+        // List window class — opaque dark navy background erased via
         // hbrBackground so flicker-free when text rows change.
-        let list_bg = CreateSolidBrush(NICOTINE_CREAM);
+        let list_bg = CreateSolidBrush(INARI_BG_SECONDARY);
         let list_class: Vec<u16> = LIST_CLASS.encode_utf16().collect();
         let list_wc = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
@@ -1371,7 +1373,7 @@ fn run_manager(
     // Create the hidden message-only control window that owns the
     // reconcile timer.
     let control_class: Vec<u16> = CONTROL_CLASS.encode_utf16().collect();
-    let control_title: Vec<u16> = "NicotineControl\0".encode_utf16().collect();
+    let control_title: Vec<u16> = "InariControl\0".encode_utf16().collect();
     let control_hwnd = unsafe {
         CreateWindowExW(
             Default::default(),

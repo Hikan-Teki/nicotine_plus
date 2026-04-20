@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use interprocess::local_socket::{prelude::*, GenericNamespaced, ListenerOptions, Stream};
 use std::io::Write;
 
-const SOCKET_PRINTNAME: &str = "nicotine.sock";
+const SOCKET_PRINTNAME: &str = "inari.sock";
 
 fn socket_name() -> Result<interprocess::local_socket::Name<'static>> {
     SOCKET_PRINTNAME
@@ -21,7 +21,7 @@ pub fn bind_listener() -> Result<interprocess::local_socket::Listener> {
 pub fn send_line(message: &str) -> Result<()> {
     let name = socket_name()?;
     let mut stream =
-        Stream::connect(name).context("Nicotine daemon'a bağlanılamadı — çalışıyor mu?")?;
+        Stream::connect(name).context("Inari daemon'a bağlanılamadı — çalışıyor mu?")?;
     writeln!(stream, "{}", message)?;
     stream.flush()?;
     Ok(())

@@ -1087,6 +1087,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "inari"
+version = "0.4.3"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "eframe",
+ "egui",
+ "fd-lock",
+ "ico",
+ "image",
+ "interprocess",
+ "reqwest",
+ "serde",
+ "toml",
+ "windows",
+]
+
+[[package]]
 name = "indexmap"
 version = "2.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1334,24 +1352,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee6cda3051665f1fb8d9e08fc35c96d5a244fb1be711a03b71118828afc9a873"
 dependencies = [
  "jni-sys",
-]
-
-[[package]]
-name = "nicotine"
-version = "0.4.3"
-dependencies = [
- "anyhow",
- "dirs",
- "eframe",
- "egui",
- "fd-lock",
- "ico",
- "image",
- "interprocess",
- "reqwest",
- "serde",
- "toml",
- "windows",
 ]
 
 [[package]]

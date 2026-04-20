@@ -85,7 +85,7 @@ impl Daemon {
 
     pub fn run(&mut self) -> Result<()> {
         let listener = ipc::bind_listener()?;
-        println!("Nicotine daemon IPC komutlarını dinliyor");
+        println!("Inari daemon IPC komutlarını dinliyor");
 
         // Spawn platform-specific input listeners.
         self.spawn_input_listeners();

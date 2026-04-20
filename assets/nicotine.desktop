@@ -1,8 +1,0 @@
-[Desktop Entry]
-Name=Nicotine
-Comment=EVE Online Multiboxing Tool
-Exec=nicotine start
-Icon=nicotine
-Type=Application
-Categories=Game;Utility;
-StartupWMClass=nicotine

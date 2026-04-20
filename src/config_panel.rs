@@ -60,14 +60,19 @@ impl CaptureBuffer {
     }
 }
 
-/// Brand palette matching the existing Linux overlay.
-const NICOTINE_RED: egui::Color32 = egui::Color32::from_rgb(196, 30, 58);
-const NICOTINE_GOLD: egui::Color32 = egui::Color32::from_rgb(180, 155, 105);
-const NICOTINE_CREAM: egui::Color32 = egui::Color32::from_rgb(252, 250, 242);
-const NICOTINE_BLACK: egui::Color32 = egui::Color32::from_rgb(30, 30, 30);
-/// Used only for the "LATEST VERSION" footer badge — chosen to read
-/// clearly against cream while harmonizing with the warm palette.
-const NICOTINE_GREEN: egui::Color32 = egui::Color32::from_rgb(60, 140, 70);
+/// Inari Syndicate palette, matching hikanteki.com.
+/// Deep navy canvas, vivid orange accent, off-white text — dark theme.
+const INARI_BG_PRIMARY: egui::Color32 = egui::Color32::from_rgb(0x0A, 0x0E, 0x1A);
+const INARI_BG_SECONDARY: egui::Color32 = egui::Color32::from_rgb(0x0F, 0x15, 0x25);
+const INARI_BG_ELEVATED: egui::Color32 = egui::Color32::from_rgb(0x14, 0x1B, 0x2E);
+const INARI_ORANGE: egui::Color32 = egui::Color32::from_rgb(0xFF, 0x77, 0x00);
+const INARI_GOLD: egui::Color32 = egui::Color32::from_rgb(0xFF, 0xCC, 0x00);
+const INARI_TEXT: egui::Color32 = egui::Color32::from_rgb(0xF0, 0xF0, 0xF5);
+const INARI_TEXT_MUTED: egui::Color32 = egui::Color32::from_rgb(0x88, 0x92, 0xA8);
+const INARI_BORDER: egui::Color32 = egui::Color32::from_rgb(0x2A, 0x32, 0x48);
+/// Used only for the "GÜNCEL SÜRÜM" footer badge — the teal from the
+/// hikanteki.com utility palette reads cleanly against the dark navy.
+const INARI_TEAL: egui::Color32 = egui::Color32::from_rgb(0x4E, 0xCC, 0xA3);
 
 pub struct ConfigPanel {
     config: Config,
@@ -104,35 +109,36 @@ impl ConfigPanel {
         config: Config,
         live: Arc<Mutex<LiveSettings>>,
     ) -> Self {
-        // Load Nicotine's brand fonts so the header looks like the overlay.
+        // Inari brand fonts — matching hikanteki.com:
+        //   Inter → body / proportional text
+        //   Exo 2 → display / logo face
+        // Both are variable TTFs with full latin-ext coverage, so Turkish
+        // diacritics (ı, İ, ş, ğ, ç, ü, ö) render correctly.
         let mut fonts = egui::FontDefinitions::default();
         fonts.font_data.insert(
-            "jetbrains_mono".to_owned(),
-            egui::FontData::from_static(include_bytes!(
-                "../assets/fonts/JetBrainsMono-Regular.ttf"
-            )),
+            "inter".to_owned(),
+            egui::FontData::from_static(include_bytes!("../assets/fonts/Inter-Variable.ttf")),
         );
         fonts.font_data.insert(
-            "logo_font".to_owned(),
-            egui::FontData::from_static(include_bytes!("../assets/fonts/Marlboro.ttf")),
+            "exo2".to_owned(),
+            egui::FontData::from_static(include_bytes!("../assets/fonts/Exo2-Variable.ttf")),
         );
         fonts
             .families
             .entry(egui::FontFamily::Proportional)
             .or_default()
-            .insert(0, "jetbrains_mono".to_owned());
+            .insert(0, "inter".to_owned());
         fonts
             .families
             .entry(egui::FontFamily::Name("logo".into()))
             .or_default()
-            .push("logo_font".to_owned());
+            .push("exo2".to_owned());
         cc.egui_ctx.set_fonts(fonts);
 
-        // Nicotine-branded light theme. egui's default light visuals use
-        // pale grays against our cream background, which makes hover /
-        // active state changes basically invisible. Override with a
-        // warmer palette so every interactive widget has a visible
-        // idle / hover / pressed progression (cream → gold → red).
+        // Dark theme base: navy canvas, orange accent. egui's default
+        // dark visuals are too neutral for a branded app, so every
+        // interactive state gets an orange progression (muted → bright →
+        // solid) to signal hover / active clearly.
         cc.egui_ctx.set_visuals(build_visuals());
 
         Self {
@@ -156,45 +162,54 @@ impl ConfigPanel {
 }
 
 fn build_visuals() -> egui::Visuals {
-    let mut v = egui::Visuals::light();
+    let mut v = egui::Visuals::dark();
 
-    // Cream page / non-interactive surfaces.
-    v.widgets.noninteractive.bg_fill = NICOTINE_CREAM;
-    v.widgets.noninteractive.weak_bg_fill = NICOTINE_CREAM;
-    v.widgets.noninteractive.fg_stroke.color = NICOTINE_BLACK;
+    // Page canvas: deep navy. `noninteractive.bg_fill` is used for panel
+    // backgrounds; paired with INARI_TEXT so labels read cleanly.
+    v.widgets.noninteractive.bg_fill = INARI_BG_PRIMARY;
+    v.widgets.noninteractive.weak_bg_fill = INARI_BG_PRIMARY;
+    v.widgets.noninteractive.fg_stroke.color = INARI_TEXT;
+    v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, INARI_BORDER);
 
-    // Idle: slightly-off-cream so the widget is distinguishable from the
-    // surrounding panel, with a gold-ish border.
-    v.widgets.inactive.bg_fill = egui::Color32::from_rgb(240, 234, 218);
-    v.widgets.inactive.weak_bg_fill = egui::Color32::from_rgb(244, 238, 224);
-    v.widgets.inactive.fg_stroke.color = NICOTINE_BLACK;
-    v.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, NICOTINE_GOLD);
+    // Idle widget (button / checkbox / slider handle): one notch lighter
+    // than the page bg, with a subtle navy border.
+    v.widgets.inactive.bg_fill = INARI_BG_SECONDARY;
+    v.widgets.inactive.weak_bg_fill = INARI_BG_SECONDARY;
+    v.widgets.inactive.fg_stroke.color = INARI_TEXT;
+    v.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, INARI_BORDER);
 
-    // Hover: strong gold — clearly different from idle so moving the
-    // mouse over anything shows a visible change.
-    v.widgets.hovered.bg_fill = NICOTINE_GOLD;
-    v.widgets.hovered.weak_bg_fill = egui::Color32::from_rgb(228, 212, 176);
-    v.widgets.hovered.fg_stroke.color = NICOTINE_BLACK;
-    v.widgets.hovered.bg_stroke = egui::Stroke::new(1.5, NICOTINE_RED);
+    // Hover: elevated navy + orange border so the cursor's target is
+    // unmistakable.
+    v.widgets.hovered.bg_fill = INARI_BG_ELEVATED;
+    v.widgets.hovered.weak_bg_fill = INARI_BG_ELEVATED;
+    v.widgets.hovered.fg_stroke.color = INARI_TEXT;
+    v.widgets.hovered.bg_stroke = egui::Stroke::new(1.5, INARI_ORANGE);
 
-    // Pressed / active: Nicotine red with cream text.
-    v.widgets.active.bg_fill = NICOTINE_RED;
-    v.widgets.active.weak_bg_fill = egui::Color32::from_rgb(230, 176, 186);
-    v.widgets.active.fg_stroke.color = NICOTINE_CREAM;
-    v.widgets.active.bg_stroke = egui::Stroke::new(1.5, NICOTINE_RED);
+    // Pressed / active: solid orange fill with dark text for contrast.
+    v.widgets.active.bg_fill = INARI_ORANGE;
+    v.widgets.active.weak_bg_fill = INARI_ORANGE;
+    v.widgets.active.fg_stroke.color = INARI_BG_PRIMARY;
+    v.widgets.active.bg_stroke = egui::Stroke::new(1.5, INARI_ORANGE);
 
-    // Open popup / selected — e.g. radio selection, text edit focus.
-    v.widgets.open.bg_fill = NICOTINE_GOLD;
-    v.widgets.open.weak_bg_fill = egui::Color32::from_rgb(228, 212, 176);
-    v.widgets.open.fg_stroke.color = NICOTINE_BLACK;
-    v.widgets.open.bg_stroke = egui::Stroke::new(1.5, NICOTINE_RED);
+    // Open popup / focused text edit — elevated bg, orange outline.
+    v.widgets.open.bg_fill = INARI_BG_ELEVATED;
+    v.widgets.open.weak_bg_fill = INARI_BG_ELEVATED;
+    v.widgets.open.fg_stroke.color = INARI_TEXT;
+    v.widgets.open.bg_stroke = egui::Stroke::new(1.5, INARI_ORANGE);
 
-    // Text selection highlight.
-    v.selection.bg_fill = NICOTINE_RED.gamma_multiply(0.45);
-    v.selection.stroke.color = NICOTINE_BLACK;
+    // Text selection highlight — orange glow (semi-transparent).
+    v.selection.bg_fill = INARI_ORANGE.gamma_multiply(0.35);
+    v.selection.stroke.color = INARI_ORANGE;
 
-    // Hyperlinks / accents (rarely used here but keep the brand colour).
-    v.hyperlink_color = NICOTINE_RED;
+    // Hyperlinks / accents.
+    v.hyperlink_color = INARI_ORANGE;
+    v.override_text_color = Some(INARI_TEXT);
+
+    // Window / panel surfaces the core paints for us.
+    v.panel_fill = INARI_BG_PRIMARY;
+    v.window_fill = INARI_BG_SECONDARY;
+    v.window_stroke = egui::Stroke::new(1.0, INARI_BORDER);
+    v.extreme_bg_color = INARI_BG_SECONDARY;
 
     v
 }
@@ -289,54 +304,56 @@ impl eframe::App for ConfigPanel {
         }
 
         // ---- Branded header strip ----
-        egui::TopBottomPanel::top("nicotine_header")
-            .exact_height(72.0)
+        // Dark navy background with an orange Exo 2 wordmark. A thin
+        // orange bottom stroke marks the header/body boundary.
+        egui::TopBottomPanel::top("inari_header")
+            .exact_height(80.0)
             .frame(
                 egui::Frame::none()
-                    .fill(NICOTINE_RED)
-                    // Asymmetric vertical margin: the Marlboro font's
-                    // glyph box has more descent than ascent, so a
-                    // geometrically-centered layout reads as "logo too
-                    // high." Bumping the top margin shifts the visual
-                    // center down by a few pixels.
-                    .inner_margin(egui::Margin {
-                        left: 0.0,
-                        right: 0.0,
-                        top: 6.0,
-                        bottom: 0.0,
-                    }),
+                    .fill(INARI_BG_SECONDARY)
+                    .stroke(egui::Stroke::new(1.0, INARI_ORANGE))
+                    .inner_margin(egui::Margin::symmetric(0.0, 8.0)),
             )
             .show(ctx, |ui| {
                 ui.with_layout(
                     egui::Layout::centered_and_justified(egui::Direction::TopDown),
                     |ui| {
-                        ui.label(
-                            egui::RichText::new("Nicotine")
-                                .family(egui::FontFamily::Name("logo".into()))
-                                .size(48.0)
-                                .color(NICOTINE_CREAM),
-                        );
+                        ui.vertical_centered(|ui| {
+                            ui.label(
+                                egui::RichText::new("INARI")
+                                    .family(egui::FontFamily::Name("logo".into()))
+                                    .size(40.0)
+                                    .color(INARI_ORANGE)
+                                    .strong(),
+                            );
+                            ui.label(
+                                egui::RichText::new("Inari Syndicate")
+                                    .family(egui::FontFamily::Name("logo".into()))
+                                    .size(12.0)
+                                    .color(INARI_GOLD),
+                            );
+                        });
                     },
                 );
             });
 
         // ---- Branded footer with external links ----
-        egui::TopBottomPanel::bottom("nicotine_footer")
+        egui::TopBottomPanel::bottom("inari_footer")
             .exact_height(40.0)
             .frame(
                 egui::Frame::none()
-                    .fill(NICOTINE_CREAM)
+                    .fill(INARI_BG_SECONDARY)
                     .inner_margin(egui::Margin::symmetric(16.0, 8.0))
-                    .stroke(egui::Stroke::new(1.0, NICOTINE_GOLD)),
+                    .stroke(egui::Stroke::new(1.0, INARI_BORDER)),
             )
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
                     // Explicit .color() on both RichText blocks — egui's
                     // hyperlink color doesn't always propagate through
                     // .strong() in 0.29, leaving the text near-invisible
-                    // against the cream background.
+                    // against the dark navy background.
                     ui.hyperlink_to(
-                        egui::RichText::new("GITHUB").strong().color(NICOTINE_RED),
+                        egui::RichText::new("GITHUB").strong().color(INARI_ORANGE),
                         "https://github.com/Hikan-Teki/nicotine_plus",
                     );
 
@@ -359,7 +376,7 @@ impl eframe::App for ConfigPanel {
                                         version
                                     ))
                                     .strong()
-                                    .color(NICOTINE_RED),
+                                    .color(INARI_ORANGE),
                                     url,
                                 );
                             }
@@ -367,7 +384,7 @@ impl eframe::App for ConfigPanel {
                                 ui.label(
                                     egui::RichText::new("GÜNCEL SÜRÜM")
                                         .strong()
-                                        .color(NICOTINE_GREEN),
+                                        .color(INARI_TEAL),
                                 );
                             }
                             None => {}
@@ -389,7 +406,7 @@ impl eframe::App for ConfigPanel {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::none()
-                    .fill(NICOTINE_CREAM)
+                    .fill(INARI_BG_PRIMARY)
                     .inner_margin(egui::Margin::symmetric(16.0, CENTRAL_V_MARGIN)),
             )
             .show(ctx, |ui| {
@@ -443,7 +460,7 @@ impl ConfigPanel {
             egui::RichText::new(label)
                 .size(16.0)
                 .strong()
-                .color(NICOTINE_RED),
+                .color(INARI_ORANGE),
         );
         ui.separator();
     }
@@ -452,13 +469,13 @@ impl ConfigPanel {
         Self::draw_section_header(ui, "Görünüm Modu");
         ui.label(
             egui::RichText::new(
-                "Nicotine, çalışan istemcilerinizi ekranda nasıl göstersin. \
+                "Inari, çalışan istemcilerinizi ekranda nasıl göstersin. \
                  Önizleme pencereleri her istemciyi canlı yansıtır; liste \
                  görünümü ise her zaman en üstte duran, adları içeren \
                  kompakt bir penceredir.",
             )
             .size(11.0)
-            .color(NICOTINE_BLACK),
+            .color(INARI_TEXT_MUTED),
         );
         ui.add_space(4.0);
 
@@ -507,7 +524,7 @@ impl ConfigPanel {
                  aynı olmalı (\"EVE - \" kısmından sonraki ad).",
             )
             .size(11.0)
-            .color(NICOTINE_BLACK),
+            .color(INARI_TEXT_MUTED),
         );
         ui.add_space(6.0);
 
@@ -701,7 +718,7 @@ impl ConfigPanel {
                      atayarak tek tuşla çift yönlü geçiş kurabilirsiniz (örn. Tab + Shift+Tab).",
                 )
                 .size(10.0)
-                .color(NICOTINE_BLACK),
+                .color(INARI_TEXT_MUTED),
             );
         });
 
@@ -721,7 +738,7 @@ impl ConfigPanel {
                  hâlde bu ayar tarayıcı/oyun içindeki ileri-geri tuşlarını da ele geçirir.",
             )
             .size(10.0)
-            .color(NICOTINE_BLACK),
+            .color(INARI_TEXT_MUTED),
         );
     }
 
@@ -748,8 +765,8 @@ impl ConfigPanel {
         let mut button = egui::Button::new(text).min_size(size);
         if is_capturing {
             button = button
-                .fill(NICOTINE_GOLD)
-                .stroke(egui::Stroke::new(1.5, NICOTINE_RED));
+                .fill(INARI_ORANGE)
+                .stroke(egui::Stroke::new(1.5, INARI_GOLD));
         }
         if ui.add(button).clicked() {
             self.capturing = if is_capturing {
@@ -966,7 +983,7 @@ fn hotkey_label(hk: &CharacterHotkey) -> String {
 /// closes the window. Takes a shared LiveSettings so slider changes can
 /// be applied to the running preview manager instantly.
 pub fn run(config: Config, live: Arc<Mutex<LiveSettings>>) -> Result<(), eframe::Error> {
-    // Load the Nicotine icon for the window chrome + taskbar + alt-tab.
+    // Load the Inari icon for the window chrome + taskbar + alt-tab.
     // Baked into the binary via include_bytes so there's no external
     // asset to lose on install. from_png_bytes goes through eframe's
     // bundled `image` crate (already pulled in with the png feature).
@@ -985,13 +1002,13 @@ pub fn run(config: Config, live: Arc<Mutex<LiveSettings>>) -> Result<(), eframe:
             // Growing reliably works everywhere, so we start small.
             .with_inner_size([600.0, 640.0])
             .with_resizable(false)
-            .with_title("Nicotine")
+            .with_title("Inari")
             .with_icon(icon),
         ..Default::default()
     };
 
     eframe::run_native(
-        "Nicotine",
+        "Inari",
         options,
         Box::new(move |cc| Ok(Box::new(ConfigPanel::new(cc, config, live)))),
     )

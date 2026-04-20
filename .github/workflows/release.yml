@@ -9,9 +9,7 @@ jobs:
   verify-version:
     # Fails fast if the git tag's version (e.g. `v0.4.3`) doesn't match
     # `version = "..."` in Cargo.toml. Prevents shipping a binary whose
-    # baked-in CARGO_PKG_VERSION disagrees with the release label — the
-    # exact class of bug that produced the v0.4.2 loop where every
-    # installed binary showed "NEW VERSION AVAILABLE" pointing at itself.
+    # baked-in CARGO_PKG_VERSION disagrees with the release label.
     name: Verify tag matches Cargo.toml version
     runs-on: ubuntu-latest
     steps:
@@ -26,44 +24,6 @@ jobs:
             echo "::error::Cargo.toml version ($CARGO_VERSION) does not match tag ($TAG_VERSION). Bump Cargo.toml and commit before tagging."
             exit 1
           fi
-
-  build:
-    name: Build Linux release binaries
-    needs: verify-version
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target:
-          - x86_64-unknown-linux-gnu
-          - aarch64-unknown-linux-gnu
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
-
-      - name: Build binary
-        env:
-          NICOTINE_TELEMETRY_TOKEN: ${{ secrets.NICOTINE_TELEMETRY_TOKEN }}
-        run: cross build --release --target ${{ matrix.target }}
-
-      - name: Rename and prepare binary
-        run: |
-          cd target/${{ matrix.target }}/release
-          ARCH=$(echo "${{ matrix.target }}" | cut -d- -f1)
-          mv Nicotine nicotine-linux-${ARCH}
-          chmod +x nicotine-linux-${ARCH}
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: nicotine-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/nicotine-linux-*
 
   build-windows:
     name: Build Windows release binary
@@ -100,19 +60,17 @@ jobs:
           tool: cargo-xwin
 
       - name: Build binary
-        env:
-          NICOTINE_TELEMETRY_TOKEN: ${{ secrets.NICOTINE_TELEMETRY_TOKEN }}
         run: cargo xwin build --release --target x86_64-pc-windows-msvc
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: nicotine-x86_64-pc-windows-msvc
-          path: target/x86_64-pc-windows-msvc/release/Nicotine.exe
+          name: inari-x86_64-pc-windows-msvc
+          path: target/x86_64-pc-windows-msvc/release/Inari.exe
 
   release:
     name: Create GitHub Release
-    needs: [build, build-windows]
+    needs: build-windows
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -129,17 +87,11 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v1
         with:
-          # Hardcoded for the v0.4.x Windows-port series. Edit / parameterize
-          # when shipping a release with a different theme.
-          name: Windows Port
           draft: false
           prerelease: false
           generate_release_notes: true
           files: |
-            artifacts/nicotine-x86_64-unknown-linux-gnu/nicotine-linux-x86_64
-            artifacts/nicotine-aarch64-unknown-linux-gnu/nicotine-linux-aarch64
-            artifacts/nicotine-x86_64-pc-windows-msvc/Nicotine.exe
+            artifacts/inari-x86_64-pc-windows-msvc/Inari.exe
             assets/icon.png
-            assets/nicotine.desktop
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

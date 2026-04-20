@@ -81,7 +81,7 @@ fn stop_command() {
     let _ = ipc::send_line("quit");
     // Force-kill any stragglers that didn't respond.
     let _ = std::process::Command::new("taskkill")
-        .args(["/IM", "nicotine.exe", "/F"])
+        .args(["/IM", "Inari.exe", "/F"])
         .output();
     let _ = std::fs::remove_file(paths::lock_file_path());
     let _ = std::fs::remove_file(paths::index_file_path());
@@ -147,12 +147,12 @@ fn main() -> Result<()> {
 
     match command {
         "start" => {
-            println!("Nicotine başlatılıyor 🚬");
+            println!("Inari başlatılıyor 🦊");
             start_command(wm, config)?;
         }
 
         "daemon" => {
-            println!("Nicotine daemon başlatılıyor...");
+            println!("Inari daemon başlatılıyor...");
             let live = LiveSettings::from_config(&config);
             let mut daemon = Daemon::new(wm, config, live);
             daemon.run()?;
@@ -191,9 +191,9 @@ fn main() -> Result<()> {
         }
 
         "stop" => {
-            println!("Nicotine durduruluyor...");
+            println!("Inari durduruluyor...");
             stop_command();
-            println!("✓ Nicotine durduruldu");
+            println!("✓ Inari durduruldu");
         }
 
         "init-config" => {
@@ -223,25 +223,26 @@ fn main() -> Result<()> {
                 lock::with_cycle_lock(|| run_cycle_direct(&wm, &config, CycleOp::Switch(target)))?;
             } else {
                 println!();
-                println!("🚬 N I C O T I N E 🚬");
+                println!("🦊  I N A R I  🦊");
+                println!("     Inari Syndicate");
                 println!();
                 println!("Soru veya öneriler için GitHub'da issue açabilirsiniz.");
                 println!();
                 println!("Kullanım:");
-                println!("  nicotine start         - Her şeyi başlat (daemon + önizlemeler)");
-                println!("  nicotine stop          - Tüm Nicotine süreçlerini durdur");
-                println!("  nicotine stack         - Tüm EVE pencerelerini üst üste diz");
-                println!("  nicotine forward       - İleri geçiş");
-                println!("  nicotine backward      - Geri geçiş");
-                println!("  nicotine switch N      - N numaralı istemciye geç (hedefli geçiş)");
-                println!("  nicotine N             - switch N için kısa yol");
-                println!("  nicotine init-config   - Varsayılan config.toml oluştur");
+                println!("  inari start         - Her şeyi başlat (daemon + önizlemeler)");
+                println!("  inari stop          - Tüm Inari süreçlerini durdur");
+                println!("  inari stack         - Tüm EVE pencerelerini üst üste diz");
+                println!("  inari forward       - İleri geçiş");
+                println!("  inari backward      - Geri geçiş");
+                println!("  inari switch N      - N numaralı istemciye geç (hedefli geçiş)");
+                println!("  inari N             - switch N için kısa yol");
+                println!("  inari init-config   - Varsayılan config.toml oluştur");
                 println!();
                 println!("Gelişmiş:");
-                println!("  nicotine daemon        - Yalnızca daemon'u başlat");
+                println!("  inari daemon        - Yalnızca daemon'u başlat");
                 println!();
                 println!("Hızlı başlangıç:");
-                println!("  nicotine start         # Arka planda otomatik çalışır");
+                println!("  inari start         # Arka planda otomatik çalışır");
             }
         }
     }
