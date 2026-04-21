@@ -1,9 +1,16 @@
-use crate::config::Config;
+use crate::config::{Config, DetectionMode};
 use crate::window_manager::{EveWindow, WindowManager};
 use anyhow::{Context, Result};
 use std::ffi::c_void;
-use windows::Win32::Foundation::{BOOL, HWND, LPARAM, TRUE, WPARAM};
-use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+use std::path::Path;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, RwLock};
+use windows::core::PWSTR;
+use windows::Win32::Foundation::{BOOL, CloseHandle, HWND, LPARAM, TRUE, WPARAM};
+use windows::Win32::System::Threading::{
+    AttachThreadInput, GetCurrentThreadId, OpenProcess, QueryFullProcessImageNameW,
+    PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, EnumWindows, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
@@ -12,11 +19,93 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SW_MINIMIZE, SW_RESTORE, WM_SYSCOMMAND,
 };
 
-pub struct WindowsManager;
+// AtomicU8 encoding for DetectionMode — fits in one atomic load so the
+// enum-scan callback can read it without locks.
+const MODE_TITLE: u8 = 0;
+const MODE_PROCESS: u8 = 1;
+
+fn mode_to_u8(m: DetectionMode) -> u8 {
+    match m {
+        DetectionMode::Title => MODE_TITLE,
+        DetectionMode::Process => MODE_PROCESS,
+    }
+}
+
+fn mode_from_u8(v: u8) -> DetectionMode {
+    match v {
+        MODE_PROCESS => DetectionMode::Process,
+        _ => DetectionMode::Title,
+    }
+}
+
+/// Lowercase + ensure `.exe` suffix so callback-side comparisons are
+/// case-insensitive regardless of what the user typed.
+fn normalize_exe(name: &str) -> String {
+    let trimmed = name.trim().to_ascii_lowercase();
+    if trimmed.is_empty() || trimmed.ends_with(".exe") {
+        trimmed
+    } else {
+        format!("{trimmed}.exe")
+    }
+}
+
+fn normalize_extras(extras: Vec<String>) -> Vec<String> {
+    extras
+        .into_iter()
+        .map(|e| normalize_exe(&e))
+        .filter(|e| !e.is_empty())
+        .collect()
+}
+
+/// Shared, hot-swappable detection settings. The daemon's config
+/// hot-reload loop calls `update` when `config.toml` changes; the window
+/// scan reads through Arcs so the next scan (≤500 ms later) picks up the
+/// new mode without a restart.
+#[derive(Clone)]
+pub struct DetectionConfig {
+    mode: Arc<AtomicU8>,
+    extras: Arc<RwLock<Vec<String>>>,
+}
+
+impl DetectionConfig {
+    pub fn new(mode: DetectionMode, extras: Vec<String>) -> Self {
+        Self {
+            mode: Arc::new(AtomicU8::new(mode_to_u8(mode))),
+            extras: Arc::new(RwLock::new(normalize_extras(extras))),
+        }
+    }
+
+    pub fn update(&self, mode: DetectionMode, extras: Vec<String>) {
+        self.mode.store(mode_to_u8(mode), Ordering::Relaxed);
+        if let Ok(mut guard) = self.extras.write() {
+            *guard = normalize_extras(extras);
+        }
+    }
+
+    pub fn current_mode(&self) -> DetectionMode {
+        mode_from_u8(self.mode.load(Ordering::Relaxed))
+    }
+
+    fn extras_snapshot(&self) -> Vec<String> {
+        self.extras.read().map(|g| g.clone()).unwrap_or_default()
+    }
+}
+
+pub struct WindowsManager {
+    detection: DetectionConfig,
+}
 
 impl WindowsManager {
-    pub fn new() -> Result<Self> {
-        Ok(Self)
+    pub fn new(mode: DetectionMode, extras: Vec<String>) -> Result<Self> {
+        Ok(Self {
+            detection: DetectionConfig::new(mode, extras),
+        })
+    }
+
+    /// Returns a handle used by the daemon to push config changes into
+    /// the running scan. Cheap to clone — just bumps Arc refcounts.
+    pub fn detection_config(&self) -> DetectionConfig {
+        self.detection.clone()
     }
 }
 
@@ -42,20 +131,97 @@ fn read_window_title(hwnd: HWND) -> String {
     String::from_utf16_lossy(&buf[..copied as usize])
 }
 
+/// Returns the lowercased exe filename (e.g. `"exefile.exe"`) of the
+/// process that owns `hwnd`. Uses `PROCESS_QUERY_LIMITED_INFORMATION`
+/// which works even for protected / elevated peers where
+/// `PROCESS_QUERY_INFORMATION` would be denied.
+fn process_exe_filename(hwnd: HWND) -> Option<String> {
+    unsafe {
+        let mut pid: u32 = 0;
+        let _ = GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == 0 {
+            return None;
+        }
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buf: Vec<u16> = vec![0u16; 520];
+        let mut size = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_WIN32,
+            PWSTR(buf.as_mut_ptr()),
+            &mut size,
+        )
+        .is_ok();
+        let _ = CloseHandle(handle);
+        if !ok {
+            return None;
+        }
+        let path = String::from_utf16_lossy(&buf[..size as usize]);
+        Path::new(&path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_ascii_lowercase())
+    }
+}
+
+/// State handed into `EnumWindows` via LPARAM. Carries the output vec
+/// plus per-scan detection knobs so the callback doesn't need to touch
+/// any shared state.
+struct EnumState<'a> {
+    out: &'a mut Vec<EveWindow>,
+    mode: DetectionMode,
+    allowed_exes: &'a [String], // used only in Process mode
+}
+
 unsafe extern "system" fn enum_collect_eve(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    let windows = &mut *(lparam.0 as *mut Vec<EveWindow>);
+    let state = &mut *(lparam.0 as *mut EnumState);
 
     if !IsWindowVisible(hwnd).as_bool() {
         return TRUE;
     }
 
     let title = read_window_title(hwnd);
-    if title.starts_with("EVE - ") && !title.contains("Launcher") {
-        windows.push(EveWindow {
-            id: hwnd_to_id(hwnd),
-            title: title.trim_start_matches("EVE - ").to_string(),
-        });
+    if title.is_empty() {
+        return TRUE;
     }
+
+    let matches = match state.mode {
+        DetectionMode::Title => {
+            // Classic vanilla-launcher behavior: only `EVE - <name>`
+            // windows, and filter out the launcher itself.
+            title.starts_with("EVE - ") && !title.contains("Launcher")
+        }
+        DetectionMode::Process => {
+            // ISBoxer / Inner Space rewrites titles, so match by the
+            // actual exe. `exefile.exe` is always accepted; any user
+            // additions are merged on top.
+            match process_exe_filename(hwnd) {
+                Some(name) => {
+                    name == "exefile.exe"
+                        || state.allowed_exes.iter().any(|e| e == &name)
+                }
+                None => false,
+            }
+        }
+    };
+
+    if !matches {
+        return TRUE;
+    }
+
+    // Strip the vanilla `EVE - ` prefix for display when present —
+    // works in both modes so ISBoxer users on standard EVE titles
+    // still see clean character names. Anything else is shown raw
+    // (ISBoxer Character Set names, custom window titles, etc.).
+    let display = title
+        .strip_prefix("EVE - ")
+        .map(str::to_string)
+        .unwrap_or(title);
+
+    state.out.push(EveWindow {
+        id: hwnd_to_id(hwnd),
+        title: display,
+    });
 
     TRUE
 }
@@ -122,13 +288,17 @@ fn force_activate(target: HWND) {
 
 impl WindowManager for WindowsManager {
     fn get_eve_windows(&self) -> Result<Vec<EveWindow>> {
-        // Use a Mutex<Vec<...>> to satisfy unwind safety even though the
-        // callback is single-threaded — EnumWindows is synchronous.
         let mut windows: Vec<EveWindow> = Vec::new();
+        let extras = self.detection.extras_snapshot();
+        let mut state = EnumState {
+            out: &mut windows,
+            mode: self.detection.current_mode(),
+            allowed_exes: &extras,
+        };
         unsafe {
             EnumWindows(
                 Some(enum_collect_eve),
-                LPARAM(&mut windows as *mut _ as isize),
+                LPARAM(&mut state as *mut _ as isize),
             )
             .context("EnumWindows failed")?;
         }

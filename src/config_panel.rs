@@ -1,4 +1,4 @@
-use crate::config::{CharacterEntry, CharacterHotkey, Config, DisplayMode, LiveSettings};
+use crate::config::{CharacterEntry, CharacterHotkey, Config, DetectionMode, DisplayMode, LiveSettings};
 use crate::tray::{self, Tray, TrayEvent};
 use eframe::egui;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -494,6 +494,8 @@ impl eframe::App for ConfigPanel {
                     .inner_margin(egui::Margin::symmetric(16.0, CENTRAL_V_MARGIN)),
             )
             .show(ctx, |ui| {
+                self.draw_detection_mode_section(ui);
+                ui.add_space(20.0);
                 self.draw_display_mode_section(ui);
                 ui.add_space(20.0);
                 self.draw_characters_section(ui);
@@ -547,6 +549,41 @@ impl ConfigPanel {
                 .color(INARI_ORANGE),
         );
         ui.separator();
+    }
+
+    fn draw_detection_mode_section(&mut self, ui: &mut egui::Ui) {
+        Self::draw_section_header(ui, "Pencere Tespiti");
+        ui.label(
+            egui::RichText::new(
+                "EVE istemcilerini nasıl bulalım? Standart EVE Launcher \
+                 kullanıyorsanız \"Standart\"ı seçin. ISBoxer / Inner Space \
+                 ile oynuyorsanız \"ISBoxer modu\"na geçin — bu, pencere \
+                 başlığı yerine çalışan `exefile.exe` süreçlerini tarar. \
+                 Karakter isimleri bu modda ISBoxer Character Set adıyla \
+                 birebir eşleşmeli.",
+            )
+            .size(11.0)
+            .color(INARI_TEXT_MUTED),
+        );
+        ui.add_space(4.0);
+
+        let prev = self.config.detection_mode;
+        ui.horizontal(|ui| {
+            ui.radio_value(
+                &mut self.config.detection_mode,
+                DetectionMode::Title,
+                "Standart (EVE Launcher)",
+            );
+            ui.add_space(12.0);
+            ui.radio_value(
+                &mut self.config.detection_mode,
+                DetectionMode::Process,
+                "ISBoxer modu",
+            );
+        });
+        if self.config.detection_mode != prev {
+            self.touch();
+        }
     }
 
     fn draw_display_mode_section(&mut self, ui: &mut egui::Ui) {
@@ -618,13 +655,23 @@ impl ConfigPanel {
 
     fn draw_characters_section(&mut self, ui: &mut egui::Ui) {
         Self::draw_section_header(ui, "Geçiş Sırası");
+        let name_hint = match self.config.detection_mode {
+            DetectionMode::Title => {
+                "İsimler, EVE'in pencere başlığıyla birebir aynı olmalı \
+                 (\"EVE - \" kısmından sonraki ad)."
+            }
+            DetectionMode::Process => {
+                "ISBoxer modunda isimler, ISBoxer Character Set'teki pencere \
+                 başlığıyla birebir aynı olmalı."
+            }
+        };
         ui.label(
-            egui::RichText::new(
-                "Karakterler burada gösterilen sırada döner. \"Döngüde\" kutucuğunu kapatırsanız \
-                 karakter listede ve kısayolunda görünmeye devam eder, ama ileri/geri döngüde \
-                 atlanır (örneğin bir scout için). İsimler, EVE'in pencere başlığıyla birebir \
-                 aynı olmalı (\"EVE - \" kısmından sonraki ad).",
-            )
+            egui::RichText::new(format!(
+                "Karakterler burada gösterilen sırada döner. \"Döngüde\" \
+                 kutucuğunu kapatırsanız karakter listede ve kısayolunda \
+                 görünmeye devam eder, ama ileri/geri döngüde atlanır \
+                 (örneğin bir scout için). {name_hint}"
+            ))
             .size(11.0)
             .color(INARI_TEXT_MUTED),
         );

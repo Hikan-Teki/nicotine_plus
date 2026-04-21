@@ -135,6 +135,23 @@ pub enum DisplayMode {
     List,
 }
 
+/// How EVE client windows are discovered during a scan. Default (`Title`)
+/// matches the classic `EVE - <name>` window-title prefix and strips it
+/// for display; this is what vanilla EVE launcher users need. `Process`
+/// matches by executable filename (`exefile.exe` plus any
+/// `extra_executables`) and uses the raw window title verbatim — required
+/// for ISBoxer / Inner Space setups that rewrite window titles with
+/// ISBoxer Character Set names instead of the `EVE - ` prefix.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+pub enum DetectionMode {
+    Title,
+    Process,
+}
+
+fn default_detection_mode() -> DetectionMode {
+    DetectionMode::Title
+}
+
 /// Settings that components watch for *live* changes — e.g. the preview
 /// manager resizes windows as soon as these change, without waiting for a
 /// save-to-disk + hot-reload cycle. Shared via Arc<Mutex<>> between the
@@ -249,6 +266,21 @@ pub struct Config {
     /// "Çıkış" (Exit) option.
     #[serde(default)]
     pub minimize_to_tray_on_close: bool,
+    /// How EVE windows are discovered. Default `Title` preserves the
+    /// classic `EVE - <name>` title-prefix scan. `Process` switches to
+    /// matching on `exefile.exe` (plus `extra_executables`) and is what
+    /// ISBoxer / Inner Space users need. Toggle from the top of the
+    /// config panel.
+    #[serde(default = "default_detection_mode")]
+    pub detection_mode: DetectionMode,
+    /// Additional executable filenames to treat as EVE clients when
+    /// `detection_mode = Process`. `exefile.exe` is always included;
+    /// this is an escape hatch for non-standard launchers that rename
+    /// the EVE binary. Case-insensitive; `.exe` suffix optional.
+    /// ISBoxer/Inner Space itself does NOT need an entry here — it
+    /// still runs EVE as `exefile.exe`.
+    #[serde(default)]
+    pub extra_executables: Vec<String>,
 }
 
 // Off by default — most users remap side buttons at the driver level
@@ -369,6 +401,8 @@ impl Config {
             positions_locked: false,
             character_hotkeys: HashMap::new(),
             minimize_to_tray_on_close: false,
+            detection_mode: default_detection_mode(),
+            extra_executables: Vec::new(),
         }
     }
 
@@ -473,6 +507,8 @@ mod tests {
             positions_locked: false,
             character_hotkeys: HashMap::new(),
             minimize_to_tray_on_close: false,
+            detection_mode: default_detection_mode(),
+            extra_executables: Vec::new(),
         }
     }
 
@@ -562,6 +598,21 @@ modifier = 0x11\n";
         assert!(config.backward_shift);
         assert!(!config.backward_alt);
         assert!(config.modifier_key.is_none());
+    }
+
+    #[test]
+    fn legacy_config_defaults_detection_and_extras() {
+        // Pre-ISBoxer-support configs have neither field — both must
+        // fall back so existing users' files keep working unchanged.
+        let toml_src = "\
+display_width = 1920\n\
+display_height = 1080\n\
+panel_height = 0\n\
+eve_width = 1000\n\
+eve_height = 1080\n";
+        let c: Config = toml::from_str(toml_src).unwrap();
+        assert_eq!(c.detection_mode, DetectionMode::Title);
+        assert!(c.extra_executables.is_empty());
     }
 
     #[test]

@@ -29,9 +29,16 @@ use std::env;
 use std::sync::Arc;
 use window_manager::WindowManager;
 
-fn create_window_manager() -> Result<Arc<dyn WindowManager>> {
+fn create_window_manager(
+    config: &Config,
+) -> Result<(Arc<dyn WindowManager>, windows_manager::DetectionConfig)> {
     println!("Windows arka ucu kullanılıyor");
-    Ok(Arc::new(windows_manager::WindowsManager::new()?))
+    let manager = windows_manager::WindowsManager::new(
+        config.detection_mode,
+        config.extra_executables.clone(),
+    )?;
+    let detection = manager.detection_config();
+    Ok((Arc::new(manager), detection))
 }
 
 enum CycleOp {
@@ -40,7 +47,11 @@ enum CycleOp {
     Switch(usize),
 }
 
-fn start_command(wm: Arc<dyn WindowManager>, config: Config) -> Result<()> {
+fn start_command(
+    wm: Arc<dyn WindowManager>,
+    detection: windows_manager::DetectionConfig,
+    config: Config,
+) -> Result<()> {
     let live = LiveSettings::from_config(&config);
 
     // Kick off the GitHub-release check on a detached thread. The
@@ -53,10 +64,12 @@ fn start_command(wm: Arc<dyn WindowManager>, config: Config) -> Result<()> {
     // just open the config panel. Edits propagate via hot-reload.
     if !ipc::daemon_running() {
         let wm_daemon = Arc::clone(&wm);
+        let detection_daemon = detection.clone();
         let config_daemon = config.clone();
         let live_daemon = Arc::clone(&live);
         std::thread::spawn(move || {
-            let mut daemon = Daemon::new(wm_daemon, config_daemon, live_daemon);
+            let mut daemon =
+                Daemon::new(wm_daemon, detection_daemon, config_daemon, live_daemon);
             if let Err(e) = daemon.run() {
                 eprintln!("Daemon hatası: {}", e);
             }
@@ -144,18 +157,18 @@ fn main() -> Result<()> {
     let command = args.get(1).map(|s| s.as_str()).unwrap_or("");
 
     let config = Config::load()?;
-    let wm = create_window_manager()?;
+    let (wm, detection) = create_window_manager(&config)?;
 
     match command {
         "start" => {
             println!("Inari başlatılıyor 🦊");
-            start_command(wm, config)?;
+            start_command(wm, detection, config)?;
         }
 
         "daemon" => {
             println!("Inari daemon başlatılıyor...");
             let live = LiveSettings::from_config(&config);
-            let mut daemon = Daemon::new(wm, config, live);
+            let mut daemon = Daemon::new(wm, detection, config, live);
             daemon.run()?;
         }
 
@@ -204,7 +217,7 @@ fn main() -> Result<()> {
         // Double-click: no command arg → go straight to the GUI start
         // path rather than printing help to a hidden console.
         "" => {
-            start_command(wm, config)?;
+            start_command(wm, detection, config)?;
         }
 
         // Handle switch command or numeric shorthand

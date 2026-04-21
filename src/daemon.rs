@@ -2,6 +2,7 @@ use crate::config::{CharacterEntry, Config, LiveSettings};
 use crate::cycle_state::CycleState;
 use crate::ipc;
 use crate::window_manager::WindowManager;
+use crate::windows_manager::DetectionConfig;
 use anyhow::Result;
 use interprocess::local_socket::traits::ListenerExt as _;
 use std::io::{BufRead, BufReader};
@@ -39,6 +40,7 @@ impl Command {
 
 pub struct Daemon {
     wm: Arc<dyn WindowManager>,
+    detection: DetectionConfig,
     state: Arc<Mutex<CycleState>>,
     config: Config,
     character_order: Option<Vec<CharacterEntry>>,
@@ -46,7 +48,12 @@ pub struct Daemon {
 }
 
 impl Daemon {
-    pub fn new(wm: Arc<dyn WindowManager>, config: Config, live: Arc<Mutex<LiveSettings>>) -> Self {
+    pub fn new(
+        wm: Arc<dyn WindowManager>,
+        detection: DetectionConfig,
+        config: Config,
+        live: Arc<Mutex<LiveSettings>>,
+    ) -> Self {
         let state = Arc::new(Mutex::new(CycleState::new()));
 
         // Initialize windows
@@ -76,6 +83,7 @@ impl Daemon {
 
         Self {
             wm,
+            detection,
             state,
             config,
             character_order,
@@ -96,6 +104,11 @@ impl Daemon {
         // within ~500ms — no daemon restart needed.
         let wm_clone = Arc::clone(&self.wm);
         let state_clone = Arc::clone(&self.state);
+        let detection_clone = self.detection.clone();
+        let mut last_detection_sig: (crate::config::DetectionMode, Vec<String>) = (
+            self.config.detection_mode,
+            self.config.extra_executables.clone(),
+        );
         let mut last_order: Option<Vec<CharacterEntry>> = if self.config.characters.is_empty() {
             None
         } else {
@@ -128,6 +141,24 @@ impl Daemon {
             }
             // Re-read config.toml to detect changes to the characters list.
             if let Ok(fresh_config) = Config::load() {
+                // Detection mode / extra exe list live-update: next scan
+                // (in ~500ms) picks up the new filter without a restart.
+                let new_detection_sig = (
+                    fresh_config.detection_mode,
+                    fresh_config.extra_executables.clone(),
+                );
+                if new_detection_sig != last_detection_sig {
+                    detection_clone.update(
+                        fresh_config.detection_mode,
+                        fresh_config.extra_executables.clone(),
+                    );
+                    println!(
+                        "Pencere tespit modu güncellendi: {:?}",
+                        fresh_config.detection_mode
+                    );
+                    last_detection_sig = new_detection_sig;
+                }
+
                 let new_order = if fresh_config.characters.is_empty() {
                     None
                 } else {
