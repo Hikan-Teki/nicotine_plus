@@ -11,8 +11,6 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_SHIFT,
-    VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT,
-    VK_SHIFT,
 };
 use crate::config::CharacterHotkey;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -138,27 +136,22 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
     CallNextHookEx(None, code, wparam, lparam)
 }
 
-fn vk_to_modifier(vk: u16) -> HOT_KEY_MODIFIERS {
-    match vk {
-        v if v == VK_SHIFT.0 || v == VK_LSHIFT.0 || v == VK_RSHIFT.0 => MOD_SHIFT,
-        v if v == VK_CONTROL.0 || v == VK_LCONTROL.0 || v == VK_RCONTROL.0 => MOD_CONTROL,
-        v if v == VK_MENU.0 || v == VK_LMENU.0 || v == VK_RMENU.0 => MOD_ALT,
-        _ => HOT_KEY_MODIFIERS(0),
-    }
-}
-
-fn hotkey_modifiers(hk: &CharacterHotkey) -> HOT_KEY_MODIFIERS {
+fn modifiers_from_flags(ctrl: bool, shift: bool, alt: bool) -> HOT_KEY_MODIFIERS {
     let mut m = HOT_KEY_MODIFIERS(0);
-    if hk.ctrl {
+    if ctrl {
         m |= MOD_CONTROL;
     }
-    if hk.shift {
+    if shift {
         m |= MOD_SHIFT;
     }
-    if hk.alt {
+    if alt {
         m |= MOD_ALT;
     }
     m
+}
+
+fn hotkey_modifiers(hk: &CharacterHotkey) -> HOT_KEY_MODIFIERS {
+    modifiers_from_flags(hk.ctrl, hk.shift, hk.alt)
 }
 
 /// Spawn the Windows input listener thread. The thread installs a low-level
@@ -301,19 +294,31 @@ unsafe fn do_register_hotkeys(config: &Config) {
     // Cycle hotkeys — gated by enable_keyboard_buttons so users can
     // disable cycle hotkeys while still using per-character ones.
     if config.enable_keyboard_buttons {
+        let forward_mod = modifiers_from_flags(
+            config.forward_ctrl,
+            config.forward_shift,
+            config.forward_alt,
+        );
         let _ = RegisterHotKey(
             None,
             HOTKEY_FORWARD_ID,
-            HOT_KEY_MODIFIERS(0),
+            forward_mod,
             config.forward_key as u32,
         );
-        let modifier = config.modifier_key.map(vk_to_modifier);
-        let backward_mod = if config.forward_key == config.backward_key {
-            modifier.unwrap_or(HOT_KEY_MODIFIERS(0))
-        } else {
-            HOT_KEY_MODIFIERS(0)
-        };
-        if config.forward_key != config.backward_key || backward_mod.0 != 0 {
+
+        let backward_mod = modifiers_from_flags(
+            config.backward_ctrl,
+            config.backward_shift,
+            config.backward_alt,
+        );
+        // Skip backward when it would collide byte-for-byte with
+        // forward — RegisterHotKey would fail silently on the same
+        // (vk, modifiers) pair, and skipping avoids a confusing
+        // "backward never fires" state when the two are configured
+        // identically by accident.
+        let same_as_forward =
+            config.backward_key == config.forward_key && backward_mod == forward_mod;
+        if !same_as_forward {
             let _ = RegisterHotKey(
                 None,
                 HOTKEY_BACKWARD_ID,

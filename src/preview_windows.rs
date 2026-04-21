@@ -19,10 +19,12 @@ use windows::Win32::Graphics::Dwm::{
 };
 use windows::Win32::Graphics::Gdi::{
     AddFontMemResourceEx, BeginPaint, ClientToScreen, CreateFontIndirectW, CreateSolidBrush,
-    DeleteObject, DrawTextW, EndPaint, FillRect, InvalidateRect, SelectObject, SetBkMode,
-    SetTextColor, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DT_CENTER,
-    DT_SINGLELINE, DT_VCENTER, FW_NORMAL, HFONT, LOGFONTW, OUT_TT_PRECIS, PAINTSTRUCT, TRANSPARENT,
+    DeleteObject, DrawTextW, EndPaint, FillRect, GetDC, GetTextExtentPoint32W, InvalidateRect,
+    ReleaseDC, SelectObject, SetBkMode, SetTextColor, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS,
+    DEFAULT_CHARSET, DT_CENTER, DT_LEFT, DT_SINGLELINE, DT_VCENTER, FW_NORMAL, HFONT, LOGFONTW,
+    OUT_TT_PRECIS, PAINTSTRUCT, TRANSPARENT,
 };
+use windows::Win32::Foundation::SIZE;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
@@ -31,12 +33,13 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
     GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, KillTimer, LoadCursorW, RegisterClassExW,
-    SetTimer, SetWindowLongPtrW, SetWindowPos, TranslateMessage, EVENT_SYSTEM_FOREGROUND,
-    GWLP_USERDATA, HCURSOR, HICON, HMENU, HWND_TOPMOST, IDC_ARROW, MSG, SM_CXVIRTUALSCREEN,
-    SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, WINEVENT_OUTOFCONTEXT, WM_DESTROY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-    WM_PAINT, WM_TIMER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
-    WS_VISIBLE,
+    SetLayeredWindowAttributes, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    TranslateMessage, EVENT_SYSTEM_FOREGROUND, GWLP_USERDATA, HCURSOR, HICON, HMENU, HWND_TOPMOST,
+    IDC_ARROW, LWA_ALPHA, MSG, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+    SM_YVIRTUALSCREEN, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOWNOACTIVATE,
+    WINEVENT_OUTOFCONTEXT, WM_DESTROY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT,
+    WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE,
 };
 
 /// Type alias for DWM thumbnail handles. windows-rs 0.59 doesn't expose a
@@ -189,6 +192,7 @@ fn px(n: i32) -> i32 {
 const PREVIEW_CLASS: &str = "InariPreviewWnd\0";
 const CONTROL_CLASS: &str = "InariPreviewCtrl\0";
 const LIST_CLASS: &str = "InariListWnd\0";
+const NAMEPLATE_CLASS: &str = "InariNameplateWnd\0";
 
 // Chrome dimensions below are "reference pixels" at 96 DPI. Every use
 // site wraps them in `px(...)` so they render at the correct physical
@@ -203,8 +207,20 @@ const RECONCILE_TIMER_ID: usize = 1;
 /// drags in the config panel feel live. 100ms = 10fps — enough for size
 /// changes to track a dragging slider without a visible lag.
 const RECONCILE_INTERVAL_MS: u32 = 100;
-const TITLE_HEIGHT: i32 = 24;
 const BORDER_WIDTH: i32 = 3;
+/// Vertical/horizontal offset of the nameplate overlay from the
+/// preview's top-left inner corner (i.e. inside the border).
+const NAMEPLATE_INSET: i32 = 4;
+/// Horizontal padding around the nameplate text.
+const NAMEPLATE_PADDING_X: i32 = 6;
+/// Vertical padding around the nameplate text.
+const NAMEPLATE_PADDING_Y: i32 = 2;
+/// Alpha for the nameplate's layered window — slightly translucent so
+/// it feels overlaid, not glued on.
+const NAMEPLATE_ALPHA: u8 = 225;
+/// Height of the list window's internal title strip (used only by the
+/// client-list view; previews no longer have a title strip).
+const LIST_TITLE_HEIGHT: i32 = 24;
 const DRAG_THRESHOLD_PX: i32 = 4;
 /// Reference-pixel grace band within which a dragged preview snaps to
 /// align with another preview's edge. Generous enough to make docking
@@ -289,11 +305,22 @@ struct PreviewWindowState {
     /// window. Read from WM_PAINT to choose border color. Updated by
     /// reconcile via the GWLP_USERDATA pointer.
     is_active: bool,
+    /// Sibling nameplate window that overlays the character name on the
+    /// top-left corner of the thumbnail area. `None` when the preview
+    /// manager could not create it; painting still works without it.
+    /// Stored here so WM_MOUSEMOVE drag handling can reposition the
+    /// nameplate alongside the preview.
+    nameplate: HWND,
 }
 
-/// One owned preview window. Drop unregisters the DWM thumbnail.
+/// One owned preview window plus its sibling nameplate overlay.
+/// Drop unregisters the DWM thumbnail and destroys both HWNDs.
 struct OwnedPreview {
     hwnd: HWND,
+    /// Sibling layered/click-through window that paints the character
+    /// name on top of the thumbnail. `HWND(null)` when creation
+    /// failed; the preview still works without it.
+    nameplate: HWND,
     source_id: u32,
     /// Mirror of `PreviewWindowState.is_active` kept here so reconcile
     /// can detect changes without dereferencing the GWLP_USERDATA pointer
@@ -312,6 +339,16 @@ impl Drop for OwnedPreview {
                 SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, 0);
             }
             let _ = DestroyWindow(self.hwnd);
+
+            // Tear down the nameplate overlay paired with this preview.
+            if !self.nameplate.0.is_null() {
+                let np_ptr = GetWindowLongPtrW(self.nameplate, GWLP_USERDATA);
+                if np_ptr != 0 {
+                    drop(Box::from_raw(np_ptr as *mut NameplateState));
+                    SetWindowLongPtrW(self.nameplate, GWLP_USERDATA, 0);
+                }
+                let _ = DestroyWindow(self.nameplate);
+            }
         }
     }
 }
@@ -345,6 +382,10 @@ struct PreviewManager {
     /// InvalidateRect every 100ms otherwise produces a visible flicker
     /// and feels sluggish.
     list_last_names: Vec<String>,
+    /// Mirror of `LiveSettings.show_preview_names` from the last
+    /// reconcile. Toggling the flag flips every nameplate's visibility
+    /// on the next tick.
+    current_show_names: bool,
 }
 
 /// Drop-guard for the list window — destroys the Win32 window and the
@@ -405,6 +446,7 @@ impl PreviewManager {
         // user drag the size sliders in the config panel and see preview
         // windows resize in real time.
         self.apply_live_size();
+        self.apply_live_show_names();
 
         let windows = {
             let s = self.state.lock().unwrap();
@@ -428,7 +470,10 @@ impl PreviewManager {
             }
         }
 
-        // Re-assert topmost Z-order every tick.
+        // Re-assert topmost Z-order every tick. Nameplates are asserted
+        // after their preview so they stay on top within the topmost
+        // layer (required because DWM composition sometimes reshuffles
+        // Z across adjacent top-most siblings).
         for preview in self.previews.values() {
             unsafe {
                 let _ = SetWindowPos(
@@ -440,6 +485,17 @@ impl PreviewManager {
                     0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
                 );
+                if !preview.nameplate.0.is_null() && self.current_show_names {
+                    let _ = SetWindowPos(
+                        preview.nameplate,
+                        Some(HWND_TOPMOST),
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    );
+                }
             }
         }
     }
@@ -658,6 +714,15 @@ impl PreviewManager {
                     (*ptr).is_active = now_active;
                 }
                 let _ = InvalidateRect(Some(preview.hwnd), None, true);
+
+                if !preview.nameplate.0.is_null() {
+                    let np_ptr =
+                        GetWindowLongPtrW(preview.nameplate, GWLP_USERDATA) as *mut NameplateState;
+                    if !np_ptr.is_null() {
+                        (*np_ptr).is_active = now_active;
+                    }
+                    let _ = InvalidateRect(Some(preview.nameplate), None, false);
+                }
             }
         }
 
@@ -726,6 +791,9 @@ impl PreviewManager {
         };
         update_thumbnail_rect(thumbnail, width, height);
 
+        let show_names = self.live.lock().unwrap().show_preview_names;
+        let nameplate = create_nameplate(module, &window.title, x, y, show_names);
+
         let per_window = Box::new(PreviewWindowState {
             source_id: window.id,
             character_name: window.title.clone(),
@@ -737,6 +805,7 @@ impl PreviewManager {
             drag_origin_screen: (0, 0),
             drag_origin_window: (0, 0),
             is_active: false,
+            nameplate,
         });
         unsafe {
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(per_window) as isize);
@@ -754,12 +823,26 @@ impl PreviewManager {
                 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
             );
+            // Nameplate asserted last so it lands above the preview
+            // within the topmost layer.
+            if !nameplate.0.is_null() {
+                let _ = SetWindowPos(
+                    nameplate,
+                    Some(HWND_TOPMOST),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                );
+            }
         }
 
         self.previews.insert(
             window.title.clone(),
             OwnedPreview {
                 hwnd,
+                nameplate,
                 source_id: window.id,
                 is_active: false,
             },
@@ -773,22 +856,115 @@ impl PreviewManager {
         self.previews.remove(&window.title);
         self.create_preview(window)
     }
+
+    /// Read the shared `show_preview_names` flag and, when it changed,
+    /// toggle every nameplate's visibility to match. Called from each
+    /// reconcile tick on Previews mode.
+    fn apply_live_show_names(&mut self) {
+        let want = self.live.lock().unwrap().show_preview_names;
+        if want == self.current_show_names {
+            return;
+        }
+        self.current_show_names = want;
+        for preview in self.previews.values() {
+            if preview.nameplate.0.is_null() {
+                continue;
+            }
+            unsafe {
+                let _ = ShowWindow(
+                    preview.nameplate,
+                    if want { SW_SHOWNOACTIVATE } else { SW_HIDE },
+                );
+                if want {
+                    // Re-assert z-order above the preview when turning on.
+                    let _ = SetWindowPos(
+                        preview.nameplate,
+                        Some(HWND_TOPMOST),
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    );
+                }
+            }
+        }
+    }
 }
 
-/// Recompute the DWM thumbnail destination rect. The thumbnail occupies
-/// everything below the title strip, inset by BORDER_WIDTH on the sides
-/// and bottom so we have margin to paint the active-client outline. We
-/// mirror the whole source window (including any title bar/border) — EVE's
-/// client area definition reportedly hides the actual game render surface,
-/// so SOURCECLIENTAREAONLY gives a blank preview.
+/// Create the layered + click-through nameplate window that paints
+/// `character_name` on top-left of a preview at screen position
+/// (preview_x, preview_y). Returns `HWND(null)` on failure so the
+/// caller can proceed without an overlay.
+fn create_nameplate(
+    module: HMODULE,
+    character_name: &str,
+    preview_x: i32,
+    preview_y: i32,
+    visible: bool,
+) -> HWND {
+    let (np_w, np_h) = measure_nameplate_size(character_name);
+    let border = px(BORDER_WIDTH);
+    let inset = px(NAMEPLATE_INSET);
+    let np_x = preview_x + border + inset;
+    let np_y = preview_y + border + inset;
+
+    let class_name: Vec<u16> = NAMEPLATE_CLASS.encode_utf16().collect();
+    let hwnd = unsafe {
+        CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED
+                | WS_EX_TRANSPARENT,
+            PCWSTR(class_name.as_ptr()),
+            PCWSTR::null(),
+            WS_POPUP,
+            np_x,
+            np_y,
+            np_w,
+            np_h,
+            None,
+            None,
+            Some(HINSTANCE(module.0)),
+            None,
+        )
+    };
+    let hwnd = match hwnd {
+        Ok(h) => h,
+        Err(_) => return HWND(std::ptr::null_mut()),
+    };
+
+    unsafe {
+        // LWA_ALPHA lets us paint with ordinary GDI in WM_PAINT and
+        // still get uniform translucency — no per-pixel alpha / bitmap
+        // DC dance required.
+        let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), NAMEPLATE_ALPHA, LWA_ALPHA);
+
+        let state = Box::new(NameplateState {
+            character_name: character_name.to_string(),
+            is_active: false,
+        });
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
+
+        if visible {
+            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        }
+    }
+    hwnd
+}
+
+/// Recompute the DWM thumbnail destination rect. The thumbnail fills
+/// the entire preview window except a `BORDER_WIDTH` frame on every
+/// side — the frame doubles as the active-client highlight (orange
+/// when this client is foreground). We mirror the whole source window
+/// (including any title bar/border) — EVE's client area definition
+/// reportedly hides the actual game render surface, so
+/// SOURCECLIENTAREAONLY gives a blank preview.
 fn update_thumbnail_rect(thumbnail: Hthumbnail, width: i32, height: i32) {
     let border = px(BORDER_WIDTH);
-    let title = px(TITLE_HEIGHT);
     let props = DWM_THUMBNAIL_PROPERTIES {
         dwFlags: DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_OPACITY,
         rcDestination: RECT {
             left: border,
-            top: title,
+            top: border,
             right: width - border,
             bottom: height - border,
         },
@@ -820,7 +996,7 @@ unsafe extern "system" fn preview_wnd_proc(
 
     match msg {
         WM_PAINT => {
-            paint_chrome(hwnd, &state.character_name, state.is_active);
+            paint_chrome(hwnd, state.is_active);
             LRESULT(0)
         }
         WM_LBUTTONDOWN => {
@@ -887,6 +1063,22 @@ unsafe extern "system" fn preview_wnd_proc(
                         0,
                         SWP_NOSIZE | SWP_NOACTIVATE,
                     );
+                    // Glue the nameplate to the preview's top-left
+                    // while dragging. Reasserting HWND_TOPMOST keeps
+                    // it stacked above the preview.
+                    if !state.nameplate.0.is_null() {
+                        let border = px(BORDER_WIDTH);
+                        let inset = px(NAMEPLATE_INSET);
+                        let _ = SetWindowPos(
+                            state.nameplate,
+                            Some(HWND_TOPMOST),
+                            new_x + border + inset,
+                            new_y + border + inset,
+                            0,
+                            0,
+                            SWP_NOSIZE | SWP_NOACTIVATE,
+                        );
+                    }
                 }
             }
             LRESULT(0)
@@ -970,6 +1162,17 @@ fn nicotine_body_font() -> HFONT {
     HFONT(raw as *mut _)
 }
 
+/// Smaller Inter font for nameplate overlays. Sized to sit unobtrusively
+/// over the top-left corner of the thumbnail without dominating it.
+fn nicotine_nameplate_font() -> HFONT {
+    static SLOT: OnceLock<isize> = OnceLock::new();
+    let raw = *SLOT.get_or_init(|| {
+        register_embedded_fonts();
+        unsafe { create_font("Inter", px(-11)).0 as isize }
+    });
+    HFONT(raw as *mut _)
+}
+
 /// Exo 2 for the list window's "INARI" title strip — matches the config
 /// panel's header.
 fn nicotine_logo_font() -> HFONT {
@@ -981,12 +1184,13 @@ fn nicotine_logo_font() -> HFONT {
     HFONT(raw as *mut _)
 }
 
-/// Paint the preview's chrome: a title strip at the top with the
-/// character name, plus a left/right/bottom border around the thumbnail
-/// area. Border color is Nicotine red when this client is the system
-/// foreground window, otherwise the same dark color as the title strip
-/// (so it blends seamlessly).
-unsafe fn paint_chrome(hwnd: HWND, character_name: &str, is_active: bool) {
+/// Paint the preview's chrome: a four-sided `BORDER_WIDTH` frame
+/// around the thumbnail. Color is Inari orange when this client is the
+/// system foreground window, otherwise the dark navy bg color (which
+/// blends into the page). The character-name overlay is painted by a
+/// separate sibling window (see `paint_nameplate`) so the text lands
+/// on top of the DWM thumbnail.
+unsafe fn paint_chrome(hwnd: HWND, is_active: bool) {
     let mut ps = PAINTSTRUCT::default();
     let hdc = BeginPaint(hwnd, &mut ps);
 
@@ -997,28 +1201,23 @@ unsafe fn paint_chrome(hwnd: HWND, character_name: &str, is_active: bool) {
 
     let chrome_color = if is_active { INARI_ORANGE } else { INARI_BG_PRIMARY };
     let chrome_brush = CreateSolidBrush(chrome_color);
-    let title_h = px(TITLE_HEIGHT);
     let border_w = px(BORDER_WIDTH);
 
-    // Top strip (full-width title bar).
-    let title_strip = RECT {
+    let top_border = RECT {
         left: 0,
         top: 0,
         right: width,
-        bottom: title_h,
+        bottom: border_w,
     };
-    FillRect(hdc, &title_strip, chrome_brush);
-
-    // Left, right, and bottom borders around the thumbnail area.
     let left_border = RECT {
         left: 0,
-        top: title_h,
+        top: 0,
         right: border_w,
         bottom: height,
     };
     let right_border = RECT {
         left: width - border_w,
-        top: title_h,
+        top: 0,
         right: width,
         bottom: height,
     };
@@ -1028,40 +1227,120 @@ unsafe fn paint_chrome(hwnd: HWND, character_name: &str, is_active: bool) {
         right: width,
         bottom: height,
     };
+    FillRect(hdc, &top_border, chrome_brush);
     FillRect(hdc, &left_border, chrome_brush);
     FillRect(hdc, &right_border, chrome_brush);
     FillRect(hdc, &bottom_border, chrome_brush);
 
     let _ = DeleteObject(chrome_brush.into());
 
-    // Centered character name in the title strip. Dark text against the
-    // bright orange active strip for contrast; off-white when inactive.
-    let _ = SetBkMode(hdc, TRANSPARENT);
-    let text_color = if is_active {
-        INARI_BG_PRIMARY
-    } else {
-        INARI_TEXT
+    let _ = EndPaint(hwnd, &ps);
+}
+
+/// Per-window state for a nameplate overlay. Stored in the
+/// nameplate's GWLP_USERDATA. `character_name` is painted on every
+/// WM_PAINT; `is_active` toggles orange vs off-white text color.
+struct NameplateState {
+    character_name: String,
+    is_active: bool,
+}
+
+/// Nameplate wnd_proc: the nameplate is click-through
+/// (WS_EX_TRANSPARENT) so mouse input reaches the preview underneath,
+/// leaving us with essentially just WM_PAINT to handle.
+unsafe extern "system" fn nameplate_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut NameplateState;
+    if state_ptr.is_null() {
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
+    }
+    let state = &mut *state_ptr;
+
+    match msg {
+        WM_PAINT => {
+            paint_nameplate(hwnd, &state.character_name, state.is_active);
+            LRESULT(0)
+        }
+        WM_DESTROY => LRESULT(0),
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+/// Paint the nameplate: solid dark navy background (the layered
+/// window's alpha makes it feel like a translucent overlay) plus the
+/// character name in a smaller Inter font. Orange text for the active
+/// client, off-white otherwise.
+unsafe fn paint_nameplate(hwnd: HWND, character_name: &str, is_active: bool) {
+    let mut ps = PAINTSTRUCT::default();
+    let hdc = BeginPaint(hwnd, &mut ps);
+
+    let mut rect = RECT::default();
+    let _ = GetWindowRect(hwnd, &mut rect);
+    let width = rect.right - rect.left;
+    let height = rect.bottom - rect.top;
+
+    let bg_brush = CreateSolidBrush(INARI_BG_PRIMARY);
+    let full_rect = RECT {
+        left: 0,
+        top: 0,
+        right: width,
+        bottom: height,
     };
+    FillRect(hdc, &full_rect, bg_brush);
+    let _ = DeleteObject(bg_brush.into());
+
+    let _ = SetBkMode(hdc, TRANSPARENT);
+    let text_color = if is_active { INARI_ORANGE } else { INARI_TEXT };
     let _ = SetTextColor(hdc, text_color);
-    let body_font = nicotine_body_font();
-    let prev_font = SelectObject(hdc, body_font.into());
+
+    let nameplate_font = nicotine_nameplate_font();
+    let prev_font = SelectObject(hdc, nameplate_font.into());
     let mut text: Vec<u16> = character_name.encode_utf16().collect();
-    let mut text_rect = title_strip;
+    let pad_x = px(NAMEPLATE_PADDING_X);
+    let mut text_rect = RECT {
+        left: pad_x,
+        top: 0,
+        right: width - pad_x,
+        bottom: height,
+    };
     let _ = DrawTextW(
         hdc,
         &mut text,
         &mut text_rect,
-        DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE,
     );
     SelectObject(hdc, prev_font);
 
     let _ = EndPaint(hwnd, &ps);
 }
 
+/// Measure the size the nameplate window needs to wrap `text` exactly.
+/// Uses a screen DC + the nameplate font so the result reflects the
+/// real rendered width including horizontal padding.
+fn measure_nameplate_size(text: &str) -> (i32, i32) {
+    unsafe {
+        let hdc = GetDC(None);
+        let font = nicotine_nameplate_font();
+        let prev = SelectObject(hdc, font.into());
+        let utf16: Vec<u16> = text.encode_utf16().collect();
+        let mut sz = SIZE::default();
+        let _ = GetTextExtentPoint32W(hdc, &utf16, &mut sz);
+        SelectObject(hdc, prev);
+        ReleaseDC(None, hdc);
+        let w = sz.cx + 2 * px(NAMEPLATE_PADDING_X);
+        let h = sz.cy + 2 * px(NAMEPLATE_PADDING_Y);
+        (w.max(px(20)), h.max(px(14)))
+    }
+}
+
 /// Height of the list window given a current client count.
 fn list_window_height(num_clients: usize) -> i32 {
     let rows = num_clients.max(1) as i32;
-    px(TITLE_HEIGHT) + rows * px(LIST_ROW_HEIGHT) + px(LIST_PADDING)
+    px(LIST_TITLE_HEIGHT) + rows * px(LIST_ROW_HEIGHT) + px(LIST_PADDING)
 }
 
 /// Window procedure for the single list-view window. Paints the title
@@ -1164,7 +1443,7 @@ unsafe fn paint_list(hwnd: HWND) {
     let width = rect.right - rect.left;
     let height = rect.bottom - rect.top;
 
-    let title_h = px(TITLE_HEIGHT);
+    let title_h = px(LIST_TITLE_HEIGHT);
     let row_h = px(LIST_ROW_HEIGHT);
 
     // Dark navy body
@@ -1336,6 +1615,27 @@ fn register_classes(module: HMODULE) -> Result<()> {
             hIconSm: HICON::default(),
         };
         let _ = RegisterClassExW(&list_wc);
+
+        // Nameplate class — layered + click-through sibling for each
+        // preview. hbrBackground is intentionally null: paint_nameplate
+        // fills the full client area itself, and leaving the OS erase
+        // step disabled keeps WM_PAINT frames flicker-free.
+        let nameplate_class: Vec<u16> = NAMEPLATE_CLASS.encode_utf16().collect();
+        let nameplate_wc = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            style: Default::default(),
+            lpfnWndProc: Some(nameplate_wnd_proc),
+            cbClsExtra: 0,
+            cbWndExtra: 0,
+            hInstance: module.into(),
+            hIcon: HICON::default(),
+            hCursor: HCURSOR::default(),
+            hbrBackground: Default::default(),
+            lpszMenuName: PCWSTR::null(),
+            lpszClassName: PCWSTR(nameplate_class.as_ptr()),
+            hIconSm: HICON::default(),
+        };
+        let _ = RegisterClassExW(&nameplate_wc);
     }
     Ok(())
 }
@@ -1397,7 +1697,10 @@ fn run_manager(
     // Allocate the manager on the heap so we can stash a pointer in the
     // control window's GWLP_USERDATA. The control wnd_proc reads this
     // back to dispatch reconcile().
-    let initial_mode = live.lock().unwrap().display_mode;
+    let (initial_mode, initial_show_names) = {
+        let l = live.lock().unwrap();
+        (l.display_mode, l.show_preview_names)
+    };
     let manager = Box::new(PreviewManager {
         wm,
         state,
@@ -1410,6 +1713,7 @@ fn run_manager(
         list: None,
         active_id: 0,
         list_last_names: Vec::new(),
+        current_show_names: initial_show_names,
     });
     let manager_ptr = Box::into_raw(manager);
     MANAGER_PTR.store(manager_ptr as usize, Ordering::Release);

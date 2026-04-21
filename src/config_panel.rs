@@ -21,7 +21,6 @@ const AUTOSAVE_DEBOUNCE: Duration = Duration::from_millis(300);
 enum CaptureTarget {
     ForwardKey,
     BackwardKey,
-    ModifierKey,
     Character(String),
 }
 
@@ -36,7 +35,9 @@ enum CapturedKey {
         shift: bool,
         alt: bool,
     },
-    Modifier(u16),
+    /// A bare modifier press observed during capture — held silently so
+    /// the next main-key press combines with it.
+    Modifier,
 }
 
 /// Per-frame held state of every VK, used to detect rising edges while
@@ -319,11 +320,17 @@ impl eframe::App for ConfigPanel {
                 }) => match &target {
                     CaptureTarget::ForwardKey => {
                         self.config.forward_key = vk;
+                        self.config.forward_ctrl = ctrl;
+                        self.config.forward_shift = shift;
+                        self.config.forward_alt = alt;
                         self.capturing = None;
                         self.touch();
                     }
                     CaptureTarget::BackwardKey => {
                         self.config.backward_key = vk;
+                        self.config.backward_ctrl = ctrl;
+                        self.config.backward_shift = shift;
+                        self.config.backward_alt = alt;
                         self.capturing = None;
                         self.touch();
                     }
@@ -340,21 +347,10 @@ impl eframe::App for ConfigPanel {
                         self.capturing = None;
                         self.touch();
                     }
-                    // User was aiming to bind a modifier but pressed a
-                    // main key instead — ignore; keep capturing so the
-                    // next Shift/Ctrl/Alt press lands.
-                    CaptureTarget::ModifierKey => {}
                 },
-                Some(CapturedKey::Modifier(vk)) => {
-                    if let CaptureTarget::ModifierKey = &target {
-                        self.config.modifier_key = Some(vk);
-                        self.capturing = None;
-                        self.touch();
-                    }
-                    // For ForwardKey/BackwardKey/Character targets,
-                    // hold the modifier silently — it'll combine with
-                    // the next main-key press (above).
-                }
+                // Bare modifier press — held silently so the next main
+                // key combines with it.
+                Some(CapturedKey::Modifier) => {}
                 None => {}
             }
 
@@ -789,39 +785,41 @@ impl ConfigPanel {
         }
 
         ui.add_enabled_ui(self.config.enable_keyboard_buttons, |ui| {
+            let mut dirty = false;
             ui.horizontal(|ui| {
                 ui.label("İleri:");
-                self.draw_bind_button(
-                    ui,
-                    &CaptureTarget::ForwardKey,
-                    vk_to_label(self.config.forward_key),
+                dirty |= ui.checkbox(&mut self.config.forward_ctrl, "Ctrl").changed();
+                dirty |= ui.checkbox(&mut self.config.forward_shift, "Shift").changed();
+                dirty |= ui.checkbox(&mut self.config.forward_alt, "Alt").changed();
+                let label = direction_label(
+                    self.config.forward_key,
+                    self.config.forward_ctrl,
+                    self.config.forward_shift,
+                    self.config.forward_alt,
                 );
+                self.draw_bind_button(ui, &CaptureTarget::ForwardKey, label);
             });
             ui.horizontal(|ui| {
-                ui.label("Geri:");
-                self.draw_bind_button(
-                    ui,
-                    &CaptureTarget::BackwardKey,
-                    vk_to_label(self.config.backward_key),
+                ui.label("Geri: ");
+                dirty |= ui.checkbox(&mut self.config.backward_ctrl, "Ctrl").changed();
+                dirty |= ui.checkbox(&mut self.config.backward_shift, "Shift").changed();
+                dirty |= ui.checkbox(&mut self.config.backward_alt, "Alt").changed();
+                let label = direction_label(
+                    self.config.backward_key,
+                    self.config.backward_ctrl,
+                    self.config.backward_shift,
+                    self.config.backward_alt,
                 );
+                self.draw_bind_button(ui, &CaptureTarget::BackwardKey, label);
             });
-            ui.horizontal(|ui| {
-                ui.label("Değiştirici:");
-                let label = match self.config.modifier_key {
-                    Some(vk) => vk_to_label(vk),
-                    None => "Yok".to_string(),
-                };
-                self.draw_bind_button(ui, &CaptureTarget::ModifierKey, label);
-                if self.config.modifier_key.is_some() && ui.button("Temizle").clicked() {
-                    self.config.modifier_key = None;
-                    self.touch();
-                }
-            });
+            if dirty {
+                self.touch();
+            }
             ui.label(
                 egui::RichText::new(
-                    "Bir kısayolu değiştirmek için üzerine tıklayın ve bir sonraki tuşa basın. \
-                     Esc iptal eder. İleri ve geri tuşlarını aynı yapıp bir değiştirici \
-                     atayarak tek tuşla çift yönlü geçiş kurabilirsiniz (örn. Tab + Shift+Tab).",
+                    "Bir kısayolu değiştirmek için üzerine tıklayın ve bir sonraki kombinasyona \
+                     basın (örn. Alt + `). Ctrl/Shift/Alt kutucuklarını değiştirerek mevcut \
+                     kısayolun modifier'larını düzenleyebilirsiniz. Esc capture'ı iptal eder.",
                 )
                 .size(10.0)
                 .color(INARI_TEXT_MUTED),
@@ -889,6 +887,15 @@ impl ConfigPanel {
         ui.checkbox(&mut self.config.show_previews, "Önizleme pencerelerini göster");
         if self.config.show_previews != prev_show {
             self.touch();
+        }
+        let prev_names = self.config.show_preview_names;
+        ui.checkbox(
+            &mut self.config.show_preview_names,
+            "Karakter isimlerini pencere üstünde göster",
+        );
+        if self.config.show_preview_names != prev_names {
+            self.touch();
+            self.live.lock().unwrap().show_preview_names = self.config.show_preview_names;
         }
         ui.add_enabled_ui(self.config.show_previews, |ui| {
             // Widen sliders so a 1px step is actually reachable without
@@ -958,11 +965,8 @@ fn poll_capture(buf: &mut CaptureBuffer) -> Option<CapturedKey> {
         }
 
         if is_modifier_vk(vk) {
-            // Canonicalize left/right variants to the plain VK the
-            // config stores (0x10 / 0x11 / 0x12).
-            let canonical = canonical_modifier(vk);
             if result.is_none() {
-                result = Some(CapturedKey::Modifier(canonical));
+                result = Some(CapturedKey::Modifier);
             }
             continue;
         }
@@ -991,15 +995,6 @@ fn poll_capture(buf: &mut CaptureBuffer) -> Option<CapturedKey> {
 
 fn is_modifier_vk(vk: u16) -> bool {
     matches!(vk, 0x10 | 0x11 | 0x12 | 0xA0..=0xA5)
-}
-
-fn canonical_modifier(vk: u16) -> u16 {
-    match vk {
-        0x10 | 0xA0 | 0xA1 => 0x10,
-        0x11 | 0xA2 | 0xA3 => 0x11,
-        0x12 | 0xA4 | 0xA5 => 0x12,
-        other => other,
-    }
 }
 
 fn is_bindable_main_key(vk: u16) -> bool {
@@ -1066,6 +1061,26 @@ fn vk_to_label(vk: u16) -> String {
         0xDE => "'".into(),
         other => format!("VK 0x{:02X}", other),
     }
+}
+
+/// Human label for a forward/backward direction hotkey, combining its
+/// modifier flags with the main key (e.g. `Alt+\``). Mirrors
+/// `hotkey_label` but takes the flags individually since direction
+/// modifiers live as discrete bools on Config rather than bundled in a
+/// struct.
+fn direction_label(vk: u16, ctrl: bool, shift: bool, alt: bool) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if ctrl {
+        parts.push("Ctrl".into());
+    }
+    if shift {
+        parts.push("Shift".into());
+    }
+    if alt {
+        parts.push("Alt".into());
+    }
+    parts.push(vk_to_label(vk));
+    parts.join("+")
 }
 
 /// Human label for a character hotkey, combining its modifier flags

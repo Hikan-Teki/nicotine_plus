@@ -148,6 +148,11 @@ pub struct LiveSettings {
     /// ignore mouse drags so they can't accidentally be knocked out of
     /// position mid-game. Click-to-activate still works on previews.
     pub positions_locked: bool,
+    /// When true, each preview window paints the character name in its
+    /// top title strip. When false, the strip is still drawn (so the
+    /// active-client orange highlight remains visible) but the name
+    /// text is omitted.
+    pub show_preview_names: bool,
 }
 
 impl LiveSettings {
@@ -157,6 +162,7 @@ impl LiveSettings {
             preview_height: config.preview_height,
             display_mode: config.display_mode,
             positions_locked: config.positions_locked,
+            show_preview_names: config.show_preview_names,
         }))
     }
 }
@@ -178,10 +184,26 @@ pub struct Config {
     pub enable_keyboard_buttons: bool,
     #[serde(default = "default_forward_key")]
     pub forward_key: u16, // VK_F11
+    #[serde(default)]
+    pub forward_ctrl: bool,
+    #[serde(default)]
+    pub forward_shift: bool,
+    #[serde(default)]
+    pub forward_alt: bool,
     #[serde(default = "default_backward_key")]
     pub backward_key: u16, // VK_F10
+    #[serde(default)]
+    pub backward_ctrl: bool,
+    #[serde(default)]
+    pub backward_shift: bool,
+    #[serde(default)]
+    pub backward_alt: bool,
     #[serde(default = "default_minimize_inactive")]
     pub minimize_inactive: bool,
+    /// Legacy single-VK modifier, preserved on disk for older configs.
+    /// On load, if set, it migrates into `backward_ctrl/shift/alt` and
+    /// is cleared to `None`. Kept in the struct so serde doesn't reject
+    /// unknown fields from v1.x configs.
     #[serde(default = "default_modifier_key")]
     pub modifier_key: Option<u16>,
     /// Width of preview windows in pixels. Single global value — every
@@ -196,6 +218,10 @@ pub struct Config {
     /// daemon runs headless and you cycle via hotkeys / CLI only.
     #[serde(default = "default_show_previews")]
     pub show_previews: bool,
+    /// Whether the character name is painted in each preview's top
+    /// strip. Toggled live from the config panel.
+    #[serde(default = "default_true")]
+    pub show_preview_names: bool,
     /// Ordered list of EVE character entries. Forward/backward cycling
     /// traverses this order (skipping `in_cycle = false` entries);
     /// `switch N` maps target N to the N-th entry regardless of cycle
@@ -325,12 +351,19 @@ impl Config {
             backward_button: default_backward_button(),
             enable_keyboard_buttons: default_enable_keyboard(),
             forward_key: default_forward_key(),
+            forward_ctrl: false,
+            forward_shift: false,
+            forward_alt: false,
             backward_key: default_backward_key(),
+            backward_ctrl: false,
+            backward_shift: false,
+            backward_alt: false,
             minimize_inactive: default_minimize_inactive(),
             modifier_key: default_modifier_key(),
             preview_width: default_preview_width(),
             preview_height: default_preview_height(),
             show_previews: default_show_previews(),
+            show_preview_names: true,
             characters: Vec::new(),
             display_mode: default_display_mode(),
             positions_locked: false,
@@ -343,7 +376,10 @@ impl Config {
         let config_path = Self::config_path();
 
         if let Ok(contents) = fs::read_to_string(&config_path) {
-            return toml::from_str(&contents).context("config.toml ayrıştırılamadı");
+            let mut cfg: Config =
+                toml::from_str(&contents).context("config.toml ayrıştırılamadı")?;
+            cfg.migrate_legacy_modifier();
+            return Ok(cfg);
         }
 
         println!("Ekranınıza göre yapılandırma oluşturuluyor...");
@@ -381,6 +417,26 @@ impl Config {
     pub fn eve_height_adjusted(&self) -> u32 {
         self.display_height - self.panel_height
     }
+
+    /// Fold the legacy `modifier_key` single-VK field into the modern
+    /// per-direction modifier bools. Called on load only; next save
+    /// drops the legacy field.
+    fn migrate_legacy_modifier(&mut self) {
+        let Some(vk) = self.modifier_key else {
+            return;
+        };
+        let already_has_flags =
+            self.backward_ctrl || self.backward_shift || self.backward_alt;
+        if !already_has_flags {
+            match vk {
+                0x10 | 0xA0 | 0xA1 => self.backward_shift = true,
+                0x11 | 0xA2 | 0xA3 => self.backward_ctrl = true,
+                0x12 | 0xA4 | 0xA5 => self.backward_alt = true,
+                _ => {}
+            }
+        }
+        self.modifier_key = None;
+    }
 }
 
 #[cfg(test)]
@@ -399,12 +455,19 @@ mod tests {
             backward_button: 1,
             enable_keyboard_buttons: true,
             forward_key: 0x7A,
+            forward_ctrl: false,
+            forward_shift: false,
+            forward_alt: false,
             backward_key: 0x79,
+            backward_ctrl: false,
+            backward_shift: false,
+            backward_alt: false,
             minimize_inactive: false,
             modifier_key: None,
             preview_width: 320,
             preview_height: 180,
             show_previews: true,
+            show_preview_names: true,
             characters: Vec::new(),
             display_mode: DisplayMode::Previews,
             positions_locked: false,
@@ -477,6 +540,28 @@ modifier = 0x11\n";
         assert!(hk.ctrl);
         assert!(!hk.shift);
         assert!(!hk.alt);
+    }
+
+    #[test]
+    fn legacy_modifier_key_migrates_to_backward_alt() {
+        let mut config = sample_config();
+        config.modifier_key = Some(0x12); // VK_MENU (Alt)
+        config.migrate_legacy_modifier();
+        assert!(config.backward_alt);
+        assert!(!config.backward_ctrl);
+        assert!(!config.backward_shift);
+        assert!(config.modifier_key.is_none());
+    }
+
+    #[test]
+    fn legacy_modifier_key_preserves_existing_flags() {
+        let mut config = sample_config();
+        config.backward_shift = true;
+        config.modifier_key = Some(0x12); // Alt — should NOT override shift
+        config.migrate_legacy_modifier();
+        assert!(config.backward_shift);
+        assert!(!config.backward_alt);
+        assert!(config.modifier_key.is_none());
     }
 
     #[test]
